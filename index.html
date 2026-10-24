@@ -1,0 +1,995 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+<script>
+/* CuidaCasa independiente: base de datos local en este navegador (sin servidor). */
+(function(){
+'use strict';
+const KEY='cuidacasa-datos-v1';
+let store={},ok=true;
+try{store=JSON.parse(localStorage.getItem(KEY)||'{}')||{};}catch(e){ok=false;store={};}
+const subs=new Set();
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(store));}catch(e){}}
+function notify(){setTimeout(()=>subs.forEach(f=>{try{f();}catch(e){}}),0);}
+window.addEventListener('storage',e=>{if(e.key===KEY){try{store=JSON.parse(e.newValue||'{}')||{};}catch(err){}notify();}});
+const clone=v=>v===undefined?undefined:JSON.parse(JSON.stringify(v));
+function merge(a,b){for(const k in b){const v=b[k];if(v&&typeof v==='object'&&!Array.isArray(v)&&a[k]&&typeof a[k]==='object'&&!Array.isArray(a[k]))merge(a[k],v);else a[k]=clone(v);}return a;}
+const segs=p=>p.split('/').length;
+function snap(path){const v=store[path];return {id:path.split('/').pop(),exists:v!==undefined,data:()=>clone(v),metadata:{fromCache:false,hasPendingWrites:false}};}
+function docRef(path){
+  if(segs(path)%2) throw new TypeError('document path needs an even number of segments');
+  return {id:path.split('/').pop(),path,
+    get:async()=>snap(path),
+    set:async d=>{store[path]=clone(d);persist();notify();},
+    update:async d=>{if(store[path]===undefined)throw {code:'invalid_argument',message:'missing'};merge(store[path],d);persist();notify();},
+    delete:async()=>{delete store[path];persist();notify();},
+    acquire:async()=>({acquired:true}),
+    onSnapshot:(next)=>{let last=NaN;const f=()=>{const s=JSON.stringify(store[path])||"__none__";if(s===last)return;last=s;next(snap(path));};subs.add(f);setTimeout(f,0);return ()=>subs.delete(f);},
+    collection:c=>colRef(path+'/'+c)};
+}
+function query(col,filters,ord,lim){
+  const n=segs(col)+1;
+  const run=()=>{let docs=Object.keys(store).filter(p=>p.startsWith(col+'/')&&segs(p)===n).map(snap);
+    filters.forEach(([f,op,v])=>{docs=docs.filter(d=>{const x=d.data()[f];switch(op){case '==':return x===v;case '!=':return x!==v;case '<':return x<v;case '<=':return x<=v;case '>':return x>v;case '>=':return x>=v;case 'in':return v.includes(x);case 'not-in':return !v.includes(x);case 'array-contains':return Array.isArray(x)&&x.includes(v);}return true;});});
+    if(ord){const [f,dir]=ord;docs.sort((a,b)=>{const x=a.data()[f],y=b.data()[f];if(x===y)return 0;if(x===undefined)return 1;if(y===undefined)return -1;return (x>y?1:-1)*(dir==='desc'?-1:1);});}
+    else docs.sort((a,b)=>a.id<b.id?-1:1);
+    if(lim)docs=docs.slice(0,lim);
+    return {docs,size:docs.length,empty:!docs.length,docChanges:()=>[],metadata:{fromCache:false,hasPendingWrites:false}};};
+  return {where:(f,op,v)=>query(col,filters.concat([[f,op,v]]),ord,lim),orderBy:(f,d)=>query(col,filters,[f,d||'asc'],lim),limit:k=>query(col,filters,ord,k),
+    get:async()=>run(),
+    onSnapshot:(next)=>{let last=NaN;const f=()=>{const r=run();const s=JSON.stringify(r.docs.map(d=>[d.id,d.data()]));if(s===last)return;last=s;next(r);};subs.add(f);setTimeout(f,0);return ()=>subs.delete(f);}};
+}
+function colRef(col){const q=query(col,[],null,null);q.path=col;q.doc=id=>docRef(col+'/'+(id||(Date.now().toString(36)+Math.random().toString(36).slice(2,8))));q.add=async d=>{const r=q.doc();await r.set(d);return r;};return q;}
+const DB={doc:docRef,collection:colRef};
+const USER={id:async()=>'local',isOwner:async()=>true,canEdit:async()=>true,can:async()=>true,me:async()=>({id:'local',name:'',avatarUrl:'data:image/gif;base64,R0lGODlhAQABAAAAACw=',color:'#0E6B66',email:null,isOwner:true,canEdit:true}),
+  profiles:async ids=>{const o={};[].concat(ids).forEach(i=>{o[i]={id:i,name:'',avatarUrl:'data:image/gif;base64,R0lGODlhAQABAAAAACw=',color:'#888',email:null,isMe:i==='local',guest:false};});return o;},
+  name:async()=>'Coordinación',search:async()=>[]};
+function saveFile(filename,data,type){const blob=data instanceof Blob?data:new Blob([data],{type:type||'application/octet-stream'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}
+const DL={save:async({filename,data})=>{saveFile(filename,data,filename.endsWith('.svg')?'image/svg+xml':undefined);}};
+window.__cuidacasaExport=()=>{const d=new Date().toISOString().slice(0,10);saveFile('CuidaCasa copia '+d+'.json',JSON.stringify({app:'CuidaCasa',version:1,fecha:new Date().toISOString(),datos:store},null,1),'application/json');};
+window.__cuidacasaImport=txt=>{const o=JSON.parse(txt);if(!o||o.app!=='CuidaCasa'||typeof o.datos!=='object')throw new Error('bad');store=o.datos;persist();notify();};
+window.claude={use:async n=>n==='db'?(ok?DB:DB):n==='user'?USER:n==='downloads'?DL:null};
+})();
+</script>
+<title>CuidaCasa App</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<style>
+/* Layout: barra superior con rol y pestañas; cada rol ve solo sus vistas. En celular la app de la cuidadora ocupa la pantalla. */
+:root{
+  --bg:#F3F6F4; --surface:#FFFFFF; --sunk:#E8EEEB; --line:#D3DDD8;
+  --ink:#16252B; --ink-2:#4B5E63; --ink-3:#7A8B8F;
+  --accent:#0E6B66; --accent-ink:#FFFFFF; --accent-soft:#D6EDEA;
+  --good:#2F7D4A; --good-soft:#DDF0E3; --warn:#A86500; --warn-soft:#FBEBCF; --crit:#B3261E; --crit-soft:#F8DCD9;
+  --phone:#0F1B1F; --shade:rgba(10,20,22,.45);
+  --f-display:"Bricolage Grotesque","Avenir Next","Segoe UI",system-ui,sans-serif;
+  --f-body:"Atkinson Hyperlegible","Segoe UI",system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0E1517; --surface:#162125; --sunk:#1D2A2F; --line:#2A3A40; --ink:#E6EEEC; --ink-2:#A9BAB8; --ink-3:#7D8F8F;
+  --accent:#4FB8AE; --accent-ink:#06201E; --accent-soft:#163A37; --good:#6BC48A; --good-soft:#173322; --warn:#E9A84A; --warn-soft:#3A2A10; --crit:#F08A80; --crit-soft:#3D1A17;
+  --phone:#05090A; --shade:rgba(0,0,0,.6); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0E1517; --surface:#162125; --sunk:#1D2A2F; --line:#2A3A40; --ink:#E6EEEC; --ink-2:#A9BAB8; --ink-3:#7D8F8F;
+  --accent:#4FB8AE; --accent-ink:#06201E; --accent-soft:#163A37; --good:#6BC48A; --good-soft:#173322; --warn:#E9A84A; --warn-soft:#3A2A10; --crit:#F08A80; --crit-soft:#3D1A17;
+  --phone:#05090A; --shade:rgba(0,0,0,.6); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0;line-height:1.15}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer} button:disabled{cursor:not-allowed;opacity:.55}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.num{font-variant-numeric:tabular-nums}
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--surface);border-bottom:1px solid var(--line)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:30;background:var(--surface)}
+.top-in{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));max-width:1240px;margin:0 auto}
+.brand{display:flex;align-items:baseline;gap:8px;margin-right:auto}
+.brand b{font-family:var(--f-display);font-size:20px}
+.brand span{font-size:12px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.08em}
+.tabs{display:flex;gap:4px;background:var(--sunk);padding:4px;border-radius:999px;overflow-x:auto;max-width:100%}
+.tabs button{border:0;background:transparent;padding:7px 13px;border-radius:999px;white-space:nowrap;color:var(--ink-2);font-weight:700;font-size:14px}
+.tabs button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.who{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)}
+.who img{width:26px;height:26px;border-radius:50%}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:7px 11px;font-weight:700;font-size:13px}
+.btn:hover:not(:disabled){border-color:var(--ink-3)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink-2)}
+.btn.danger{color:var(--crit)}
+main{max-width:1240px;margin:0 auto;padding-block:22px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.view-head{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px;margin-bottom:18px}
+.view-head h1{font-size:26px}
+.view-head p{margin:4px 0 0;color:var(--ink-2);max-width:64ch}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg button{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 12px;font-weight:700;font-size:13px;color:var(--ink-2)}
+.seg button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.panel-h{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.panel-h h2{font-size:18px}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;border-radius:999px;padding:2px 9px;white-space:nowrap}
+.chip.good{background:var(--good-soft);color:var(--good)} .chip.warn{background:var(--warn-soft);color:var(--warn)} .chip.crit{background:var(--crit-soft);color:var(--crit)} .chip.info{background:var(--sunk);color:var(--ink-2)} .chip.acc{background:var(--accent-soft);color:var(--accent)}
+.eyebrow{font-size:11.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3);font-weight:700}
+.note{font-size:12.5px;color:var(--ink-3)}
+.empty{padding:26px 18px;color:var(--ink-2);text-align:center}
+.center{max-width:560px;margin:40px auto;padding:26px;display:grid;gap:14px}
+.field label{display:block;font-size:12.5px;font-weight:700;color:var(--ink-2);margin-bottom:4px}
+.field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--bg)}
+.field textarea{min-height:80px;resize:vertical}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media (max-width:560px){.grid2{grid-template-columns:minmax(0,1fr)}}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(92px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);border-radius:12px;padding:11px 16px;font-weight:700;font-size:14px;z-index:60;max-width:calc(100% - 32px)}
+
+/* Cuidadora */
+.cuid-wrap{display:grid;grid-template-columns:minmax(0,440px) minmax(0,1fr);gap:32px;align-items:start}
+@media (max-width:860px){.cuid-wrap{grid-template-columns:minmax(0,1fr)}}
+.phone{background:var(--phone);border-radius:38px;padding:12px;max-width:440px;width:100%;margin:0 auto;box-shadow:0 18px 40px rgba(0,0,0,.18)}
+.screen{background:var(--bg);border-radius:28px;overflow:hidden;min-height:640px;position:relative;display:flex;flex-direction:column}
+@media (max-width:560px){.phone{background:transparent;padding:0;border-radius:0;box-shadow:none;max-width:none}.screen{border-radius:14px;min-height:0;border:1px solid var(--line)}}
+.app-head{padding:14px 18px;background:var(--accent);color:var(--accent-ink)}
+.app-head .s{font-size:13px;opacity:.88}
+.app-head h2{font-size:22px;margin-top:2px}
+.app-body{padding:14px 14px 18px;display:flex;flex-direction:column;gap:12px;flex:1}
+.checkin{display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center;padding:20px 12px}
+.code-in{display:flex;gap:8px;width:100%}
+.code-in input{flex:1;min-width:0;font-size:24px;letter-spacing:.3em;text-align:center;border:1.5px solid var(--line);border-radius:12px;padding:10px;background:var(--surface)}
+.big{width:100%;border:0;border-radius:14px;background:var(--accent);color:var(--accent-ink);padding:15px;font-size:17px;font-weight:700}
+.shift-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:13px}
+.prog{height:8px;background:var(--sunk);border-radius:99px;overflow:hidden}
+.prog>i{display:block;height:100%;background:var(--accent);border-radius:99px}
+.task{display:grid;grid-template-columns:48px 1fr auto;gap:10px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px 12px;text-align:left;width:100%}
+.task .hr{font-family:var(--f-display);font-size:16px;font-weight:700}
+.task .lbl{font-weight:700;display:flex;align-items:center;gap:7px}
+.task .obj{font-size:12.5px;color:var(--ink-2)}
+.task.ahora{border-color:var(--accent);box-shadow:inset 4px 0 0 var(--accent)}
+.task.omitida{border-color:var(--crit);box-shadow:inset 4px 0 0 var(--crit)}
+.task.hecha{opacity:.72}
+.ico{width:20px;height:20px;flex:none;color:var(--accent)}
+.group-t{font-size:12px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.08em;margin:6px 2px -4px}
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--surface);border-top:1px solid var(--line);box-shadow:0 -6px 18px rgba(0,0,0,.08);padding:10px max(12px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px))}
+.dock-in{display:flex;gap:8px;max-width:440px;margin:0 auto}
+.dock-space{height:84px}
+.cuid-col{max-width:440px;margin:0 auto;display:grid;gap:14px}
+.recorda{padding:12px 16px}
+.recorda h3{font-size:15px;margin-bottom:4px}
+.recorda ul{margin:0;padding-left:18px;color:var(--ink-2);font-size:13.5px;display:grid;gap:2px}
+.dock .btn{flex:1;padding:11px 6px;border-radius:12px;font-size:13.5px}
+.dock .btn.crit{background:var(--crit-soft);color:var(--crit);border-color:transparent}
+.sheet-bg{position:fixed;inset:0;background:var(--shade);display:flex;align-items:flex-end;justify-content:center;z-index:50}
+.sheet{background:var(--surface);width:100%;max-width:480px;border-radius:22px 22px 0 0;padding:18px 16px calc(20px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:12px;max-height:88vh;overflow:auto}
+@media (min-width:700px){.sheet-bg{align-items:center}.sheet{border-radius:20px}}
+.sheet h3{font-size:20px}
+.opts{display:flex;flex-wrap:wrap;gap:8px}
+.opt{border:1.5px solid var(--line);background:var(--surface);border-radius:12px;padding:11px 14px;font-weight:700;font-size:15px;min-width:64px}
+.opt[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.sheet textarea{width:100%;min-height:96px;border:1.5px solid var(--line);border-radius:12px;padding:10px;background:var(--bg);resize:vertical}
+.side{display:flex;flex-direction:column;gap:14px}
+.side .panel{padding:16px 18px}
+.side h3{font-size:17px;margin-bottom:6px}
+.side p,.side li{color:var(--ink-2);margin:0}
+.side ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+
+/* Tablero */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+@media (max-width:820px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.kpi{padding:14px 16px}
+.kpi .v{font-family:var(--f-display);font-size:30px;font-weight:700;margin-top:2px}
+.kpi .s{font-size:12.5px;color:var(--ink-2)}
+.board{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:980px){.board{grid-template-columns:minmax(0,1fr)}}
+.alert{display:grid;grid-template-columns:6px 1fr auto;gap:12px;padding:12px 16px 12px 0;border-bottom:1px solid var(--line);align-items:center}
+.alert:last-child{border-bottom:0}
+.alert .bar{align-self:stretch;border-radius:0 4px 4px 0}
+.alert.crit .bar{background:var(--crit)} .alert.warn .bar{background:var(--warn)} .alert.info .bar{background:var(--ink-3)}
+.alert .t1{font-weight:700} .alert .t2{font-size:13px;color:var(--ink-2)}
+.alert.done{opacity:.62}
+.pt{padding:14px 16px;border-bottom:1px solid var(--line);display:grid;gap:8px}
+.pt:last-child{border-bottom:0}
+.pt-top{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 12px;align-items:baseline}
+.pt-top b{font-size:16px}
+.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.metric .l{font-size:12px;color:var(--ink-3)} .metric .m{font-weight:700}
+.mini{height:6px;background:var(--sunk);border-radius:9px;overflow:hidden;margin-top:4px}
+.mini>i{display:block;height:100%;border-radius:9px}
+.cq{padding:12px 16px;border-bottom:1px solid var(--line);display:grid;gap:6px}
+.cq:last-child{border-bottom:0}
+.cq textarea{width:100%;min-height:60px;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg)}
+
+/* Plan */
+.plan-grid{display:grid;grid-template-columns:minmax(0,330px) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.plan-grid{grid-template-columns:minmax(0,1fr)}}
+.stack{display:grid;gap:18px}
+.val{padding:16px;display:grid;gap:14px}
+.interp{font-size:12.5px;margin-top:4px;color:var(--ink-2)}
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+td input,td select{border:1px solid var(--line);border-radius:7px;padding:6px 8px;background:var(--bg);width:100%;min-width:80px}
+.agenda{display:flex;flex-wrap:wrap;gap:6px;padding:14px 16px}
+.add-row{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;align-items:center;border-top:1px solid var(--line)}
+.add-row select{border:1px solid var(--line);border-radius:8px;padding:7px 10px;background:var(--bg)}
+.qr{display:grid;grid-template-columns:auto minmax(0,1fr);gap:16px;padding:16px;align-items:center}
+@media (max-width:520px){.qr{grid-template-columns:minmax(0,1fr);justify-items:start}}
+.qr .box{background:#fff;padding:8px;border-radius:10px;border:1px solid var(--line);line-height:0}
+.qr .box svg{width:150px;height:150px}
+.code{font-family:var(--f-display);font-size:34px;letter-spacing:.2em;font-weight:700}
+.plist{display:grid}
+.plist button{text-align:left;border:0;border-bottom:1px solid var(--line);background:transparent;padding:12px 16px;display:grid;gap:2px}
+.plist button[aria-pressed="true"]{background:var(--accent-soft)}
+.plist button:last-child{border-bottom:0}
+
+.esc{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.esc .interp{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.nivel{padding:14px 16px;border-bottom:1px solid var(--line);border-left:4px solid var(--line)}
+.nivel.good{border-left-color:var(--good)} .nivel.warn{border-left-color:var(--warn)} .nivel.crit{border-left-color:var(--crit)}
+.nivel b{font-family:var(--f-display);font-size:17px}
+.recs{padding:14px 16px}
+.rec{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:14px}
+.rec:first-of-type{border-top:0}
+.esc-it{display:grid;gap:6px;padding-top:6px;border-top:1px solid var(--line)}
+.opt.sm{padding:8px 11px;font-size:14px;min-width:0;text-align:left;display:inline-flex;gap:8px;align-items:center}
+.opt .pts{font-size:12px;color:var(--ink-3);font-weight:700;background:var(--sunk);border-radius:6px;padding:0 6px}
+.opt[aria-pressed="true"] .pts{background:var(--surface);color:var(--accent)}
+.esc-tot{position:sticky;bottom:-20px;background:var(--surface);padding:10px 0;border-top:1px solid var(--line)}
+/* Familia */
+.fam{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,340px);gap:18px;align-items:start}
+@media (max-width:900px){.fam{grid-template-columns:minmax(0,1fr)}}
+.fam-sum{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:16px}
+@media (max-width:620px){.fam-sum{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.fam-sum .v{font-family:var(--f-display);font-size:22px;font-weight:700}
+.fam-sum .l{font-size:12.5px;color:var(--ink-2)}
+.tl{list-style:none;margin:0;padding:6px 16px 14px}
+.tl li{display:grid;grid-template-columns:52px 14px 1fr;gap:10px;padding:7px 0;align-items:start}
+.tl .h{font-weight:700;color:var(--ink-2)}
+.tl .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);margin-top:6px}
+.tl .dot.w{background:var(--warn)} .tl .dot.c{background:var(--crit)}
+.form{padding:16px;display:grid;gap:10px}
+.form textarea{width:100%;min-height:96px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--bg);resize:vertical}
+.reply{background:var(--sunk);border-radius:10px;padding:8px 10px;font-size:14px}
+
+/* Equipo */
+.mem{display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
+.mem:last-child{border-bottom:0}
+.mem img{width:36px;height:36px;border-radius:50%}
+.mem .r{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.mem .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.checks{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:6px}
+.checks label{display:flex;gap:6px;align-items:center;font-size:14px}
+</style>
+
+<header class="top"><div class="top-in" id="top"><div class="brand"><b>CuidaCasa</b><span>Cuidado trazable</span></div></div></header>
+<main id="app"><div class="panel center"><h2>Cargando CuidaCasa…</h2><p class="note">Conectando con los datos del equipo.</p></div></main>
+<div id="sheet"></div>
+<div id="toast" hidden class="toast" role="status"></div>
+
+<script>
+(function(){
+'use strict';
+/* Enlace de esta app: el QR del domicilio abre esta dirección con el código de ingreso. */
+const APP_URL=/^https?:$/.test(location.protocol)?location.href.split('#')[0]:'';
+const TZ='America/Argentina/Buenos_Aires';
+const TIPOS={postural:{n:'Cambio de posición',ico:'pos'},hidratacion:{n:'Hidratación',ico:'hid'},alimentacion:{n:'Alimentación',ico:'ali'},medicacion:{n:'Medicación',ico:'med'},higiene:{n:'Higiene',ico:'hig'}};
+const ICONS={
+  hid:'<path d="M12 3c3.5 4.6 6 8 6 11a6 6 0 0 1-12 0c0-3 2.5-6.4 6-11z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>',
+  pos:'<path d="M4 15h16M4 15v-4h7a3 3 0 0 1 3 3v1M20 15v4M4 19v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="7.5" cy="8.5" r="2" fill="none" stroke="currentColor" stroke-width="2"/>',
+  ali:'<path d="M3 12h18a9 9 0 0 1-18 0zM12 4v4M8 6v2M16 6v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  med:'<rect x="3" y="8" width="18" height="8" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8" stroke="currentColor" stroke-width="2"/>',
+  hig:'<path d="M6 20c-1-5 1-9 6-12M12 8c3 2 6 5 6 12M9 4h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+};
+const ico=k=>'<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">'+ICONS[k]+'</svg>';
+const ALARMA=/enrojec|no quis|no comi|rechaz|ca[ií]d|fiebre|v[oó]mit|confus|ahog|dolor|sangr|desmay/i;
+const ROLES={coordinacion:'Coordinación',cuidadora:'Cuidadora',familia:'Familia'};
+const DEF_PLAN=[
+  {id:'pos',tipo:'postural',cada:2,obj:'Rotar posiciones'},
+  {id:'hid',tipo:'hidratacion',cada:2,obj:'Ofrecer 200 ml',meta:1200},
+  {id:'ali',tipo:'alimentacion',horas:[540,780,1110],obj:'Asistir la comida'},
+  {id:'med',tipo:'medicacion',horas:[540],obj:'Indicar fármaco y dosis'},
+  {id:'hig',tipo:'higiene',horas:[600],obj:'Higiene y control de piel'}];
+
+let db=null,user=null,dl=null,me=null,who=null,isOwner=false,canEdit=false;
+const CODE_KEY='cuidacasa-codigo';
+let memCode;
+function loadCode(){if(memCode!==undefined)return memCode;try{return localStorage.getItem(CODE_KEY)||null;}catch(e){return null;}}
+function storeCode(c){memCode=c||null;try{if(c)localStorage.setItem(CODE_KEY,c);else localStorage.removeItem(CODE_KEY);}catch(e){}}
+function resolveWho(){
+  const c=loadCode(),m=S.equipo.miembros||{};
+  if(c&&m['c-'+c]) who='c-'+c;
+  else if(me) who=me;
+  else who=null;
+}
+const S={equipo:{miembros:{}},pacientes:{},dias:{},consultas:[],solicitudes:[],names:{},loaded:{e:false,p:false,d:false},fecha:null};
+const ui={view:null,pid:null,sheet:null,drafts:{},fatal:null,hashIntent:null,readOnly:false};
+
+/* ---------- utilidades ---------- */
+function now(){
+  const p=new Intl.DateTimeFormat('en-CA',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date());
+  const g=t=>(p.find(x=>x.type===t)||{}).value;
+  return {fecha:g('year')+'-'+g('month')+'-'+g('day'),min:(+g('hour'))*60+(+g('minute'))};
+}
+const hhmm=t=>{t=Math.max(0,Math.round(t));return String(Math.floor(t/60)%24).padStart(2,'0')+':'+String(t%60).padStart(2,'0');};
+const parseHH=s=>{const m=String(s).trim().match(/^(\d{1,2})(?:[:.](\d{2}))?$/);if(!m)return null;const h=+m[1],mi=+(m[2]||0);if(h>24||mi>59||(h===24&&mi>0))return null;return h*60+mi;};
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct=(a,b)=>b?Math.round(a/b*100):0;
+const rid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const fechaTxt=f=>{const[a,m,d]=f.split('-');return d+'/'+m+'/'+a;};
+let toastT=null;
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true;},2800);}
+function errMsg(e){
+  const c=e&&e.code;
+  if(c==='invalid_argument') return 'Tu acceso a esta página es solo para ver, así que no se puede guardar. La coordinación tiene que invitarte por email con permiso de edición.';
+  if(c==='quota_exceeded') return 'Se llenó el espacio de datos de la app. Avisale a la coordinación.';
+  if(c==='resource_exhausted') return 'Demasiados cambios seguidos. Esperá unos segundos y probá de nuevo.';
+  return 'No se pudo guardar. Revisá la conexión y probá de nuevo.';
+}
+const queues={};
+function qWrite(key,fn){const p=(queues[key]||Promise.resolve()).then(fn,fn);queues[key]=p.catch(()=>{});return p;}
+async function safe(fn,okMsg){try{await fn();if(okMsg)toast(okMsg);return true;}catch(e){toast(errMsg(e));return false;}}
+
+/* ---------- roles ---------- */
+function rol(){
+  resolveWho();
+  if(who&&String(who).startsWith('c-')){const mc=S.equipo.miembros[who];if(mc&&mc.rol)return mc.rol;}
+  if(isOwner){if(!who)who=me||'owner';return 'coordinacion';}
+  const m=S.equipo.miembros&&who&&S.equipo.miembros[who];
+  if(m&&m.rol) return m.rol;
+  if(canEdit) return 'coordinacion';
+  return null;
+}
+const activos=()=>Object.keys(S.pacientes).filter(pid=>S.pacientes[pid].activo!==false).sort((a,b)=>String(S.pacientes[a].nombre).localeCompare(S.pacientes[b].nombre));
+function misPacientes(){
+  const r=rol(); if(r==='coordinacion') return activos();
+  const m=S.equipo.miembros[who]; return ((m&&m.pacientes)||[]).filter(pid=>S.pacientes[pid]&&S.pacientes[pid].activo!==false);
+}
+function personasDe(pid,r){return Object.keys(S.equipo.miembros||{}).filter(u=>{const m=S.equipo.miembros[u];return m.rol===r&&(m.pacientes||[]).includes(pid);});}
+function nombre(uid){const m=(S.equipo.miembros||{})[uid];if(m&&m.nombre)return m.nombre;if(uid==='owner'||uid==='local')return 'Coordinación';const p=S.names[uid];return (p&&p.name)||'Alguien del equipo';}
+let namesBusy=false;
+async function ensureNames(ids){
+  if(!user||namesBusy) return; ids=[...new Set(ids.filter(Boolean))].filter(id=>!(id in S.names)); if(!ids.length) return;
+  namesBusy=true; try{const ps=await user.profiles(ids);Object.assign(S.names,ps);}catch(e){} namesBusy=false; render();
+}
+
+/* ---------- lógica del cuidado ---------- */
+function tareas(pid){
+  const p=S.pacientes[pid],out=[]; if(!p) return out;
+  const t0=p.turno[0],t1=p.turno[1];
+  (p.plan||[]).forEach(it=>{
+    let hs=[];
+    if(it.horas&&it.horas.length) hs=it.horas.slice();
+    else if(it.cada>0){for(let t=(it.desde!=null?it.desde:t0+30);t<t1;t+=it.cada*60) hs.push(t);}
+    hs.filter(t=>t>=t0&&t<t1).forEach(t=>out.push({key:it.id+'@'+t,it,t}));
+  });
+  return out.sort((a,b)=>a.t-b.t);
+}
+const dia=pid=>S.dias[pid]||{};
+const regs=pid=>Object.values(dia(pid).reg||{}).sort((a,b)=>a.t-b.t);
+const regDe=(pid,key)=>regs(pid).find(r=>r.key===key);
+function estado(pid,tk,c){
+  const r=regDe(pid,tk.key);
+  if(r) return Math.abs(r.t-tk.t)<=30?'hecha':'tarde';
+  if(c<tk.t-30) return 'proxima';
+  if(c<=tk.t+30) return 'ahora';
+  return 'omitida';
+}
+function cumplimiento(pid,c){let prog=0,ok=0;tareas(pid).forEach(tk=>{const e=estado(pid,tk,c);if(e==='proxima'||e==='ahora')return;prog++;if(e==='hecha')ok++;});return {prog,ok,p:pct(ok,prog)};}
+const liquidos=pid=>regs(pid).filter(r=>r.tipo==='hidratacion').reduce((s,r)=>s+((r.d&&r.d.ml)||0),0);
+const metaLiq=pid=>{const it=((S.pacientes[pid]||{}).plan||[]).find(i=>i.tipo==='hidratacion');return it?(it.meta||0):0;};
+function ultimoPostural(pid){const rs=regs(pid).filter(r=>r.tipo==='postural').map(r=>r.t);const ci=dia(pid).checkin;if(!rs.length) return ci?ci.t:null;return Math.max.apply(null,rs.concat(ci?[ci.t]:[]));}
+const novs=pid=>Object.keys(dia(pid).nov||{}).map(id=>Object.assign({id},dia(pid).nov[id])).sort((a,b)=>a.t-b.t);
+function alertas(c){
+  const out=[];
+  activos().forEach(pid=>{
+    const p=S.pacientes[pid],d=dia(pid),ci=d.checkin,cuid=personasDe(pid,'cuidadora').map(nombre).join(', ')||'La cuidadora';
+    novs(pid).forEach(n=>{
+      if(n.caida) out.push({id:'nov-'+n.id,pid,sev:'crit',t:n.t,t1:'Caída reportada',t2:'“'+n.txt+'”'});
+      else if(ALARMA.test(n.txt)) out.push({id:'nov-'+n.id,pid,sev:'warn',t:n.t,t1:'Señal de alarma en una novedad',t2:'“'+n.txt+'”'});
+    });
+    if(c<p.turno[0]) return;
+    if(!ci){ if(c>p.turno[0]+15) out.push({id:'sinllegada-'+pid,pid,sev:'crit',t:p.turno[0]+15,t1:'Sin llegada registrada',t2:cuid+' debía llegar a las '+hhmm(p.turno[0])+'.'}); return; }
+    if(ci.t-p.turno[0]>10) out.push({id:'tarde-'+pid,pid,sev:'info',t:ci.t,t1:'Llegada tardía',t2:(ci.t-p.turno[0])+' min tarde ('+hhmm(ci.t)+').'});
+    if(d.checkout) return;
+    if((p.plan||[]).some(i=>i.tipo==='postural')){const u=ultimoPostural(pid);if(u!==null&&c-u>150) out.push({id:'postural-'+pid+'-'+u,pid,sev:'crit',t:u+150,t1:'Más de 2 h 30 min sin cambio de posición',t2:'Último registro: '+hhmm(u)+(p.val&&p.val.braden?' · Braden '+p.val.braden:'')+'.'});}
+    const meta=metaLiq(pid);
+    if(meta){const fr=Math.min(1,(c-p.turno[0])/(p.turno[1]-p.turno[0])),esp=meta*fr,tot=liquidos(pid);
+      if(fr>0.25&&tot<0.7*esp) out.push({id:'hid-'+pid+'-'+Math.floor(c/120),pid,sev:'warn',t:c,t1:'Hidratación por debajo del objetivo',t2:tot+' ml registrados; a esta hora se esperaban unos '+Math.round(esp/50)*50+' ml (meta: '+meta+' ml).'});}
+    tareas(pid).forEach(tk=>{if(tk.it.tipo==='postural'||tk.it.tipo==='hidratacion')return;if(estado(pid,tk,c)==='omitida') out.push({id:'omit-'+pid+'-'+tk.key,pid,sev:tk.it.tipo==='medicacion'?'crit':'warn',t:tk.t+30,t1:TIPOS[tk.it.tipo].n+' de las '+hhmm(tk.t)+' sin registrar',t2:tk.it.obj});});
+  });
+  const ack=id=>{const pid=(out.find(a=>a.id===id)||{}).pid;return pid&&dia(pid).ack&&dia(pid).ack[id];};
+  const rank={crit:0,warn:1,info:2};
+  out.forEach(a=>{a.ack=ack(a.id)||null;});
+  return out.sort((a,b)=>(!!a.ack)-(!!b.ack)||rank[a.sev]-rank[b.sev]||a.t-b.t);
+}
+function describe(r){
+  const d=r.d||{};
+  switch(r.tipo){
+    case 'hidratacion': return d.ml?('Tomó '+d.ml+' ml de líquido'):'Rechazó el líquido ofrecido';
+    case 'alimentacion': return 'Comió '+d.pct+'% de la comida';
+    case 'postural': return 'Cambio de posición: '+String(d.pos||'').toLowerCase();
+    case 'medicacion': return 'Medicación: '+String(d.est||'').toLowerCase();
+    case 'higiene': return 'Higiene: '+(d.acc||[]).join(', ').toLowerCase()+(d.piel?(' · piel '+d.piel.toLowerCase()):'');
+  }
+  return '';
+}
+
+/* ---------- escritura ---------- */
+function writeDia(pid,patch){
+  const fecha=S.fecha,ref=db.doc('dias/'+pid+'_'+fecha);
+  return qWrite('dia-'+pid,async()=>{
+    if(S.dias[pid]) return ref.update(patch);
+    const s=await ref.get();
+    if(s.exists) return ref.update(patch);
+    return ref.set(Object.assign({pid,fecha},patch));
+  });
+}
+const writePac=(pid,patch)=>qWrite('pac-'+pid,()=>db.doc('pacientes/'+pid).update(patch));
+const writeEquipo=body=>qWrite('equipo',()=>db.doc('config/equipo').set(body));
+
+/* ---------- render ---------- */
+const app=document.getElementById('app');
+function tabsFor(r){
+  if(r==='coordinacion') return [['tablero','Supervisión'],['plan','Pacientes y planes'],['guia','Guía de valoración'],['equipo','Equipo'],['cuidadora','Vista cuidadora'],['familia','Vista familia']];
+  if(r==='cuidadora') return [['cuidadora','Mi turno']];
+  if(r==='familia') return [['familia','Portal familiar']];
+  return [];
+}
+function renderTop(r){
+  const tabs=tabsFor(r);
+  if(!ui.view||!tabs.some(t=>t[0]===ui.view)) ui.view=tabs.length?tabs[0][0]:null;
+  const meP=who&&!String(who).startsWith('c-')&&who!=='local'?S.names[who]:null,byCode=who&&String(who).startsWith('c-');
+  const nm=byCode?nombre(who):((meP&&meP.name)||'Vos');
+  document.getElementById('top').innerHTML='<div class="brand"><b>CuidaCasa</b><span>Cuidado trazable</span></div>'+
+    (tabs.length>1?'<nav class="tabs" aria-label="Secciones">'+tabs.map(([k,l])=>'<button data-view="'+k+'" aria-pressed="'+(ui.view===k)+'">'+l+'</button>').join('')+'</nav>':'')+
+    (r?'<div class="who">'+(meP?'<img alt="" src="'+esc(meP.avatarUrl)+'">':'')+'<span><b>'+esc(nm)+'</b> · '+ROLES[r]+'</span>'+(byCode?'<button class="btn ghost" data-act="logout">Salir</button>':'')+'</div>':'');
+}
+function captureFocus(){const a=document.activeElement;if(!a||!a.id)return null;return {id:a.id,s:a.selectionStart,e:a.selectionEnd};}
+function restoreFocus(f){if(!f)return;const el=document.getElementById(f.id);if(!el)return;el.focus();try{if(f.s!=null)el.setSelectionRange(f.s,f.e);}catch(e){}}
+const draft=(id,def)=>id in ui.drafts?ui.drafts[id]:(def||'');
+function render(){
+  const f=captureFocus();
+  if(ui.fatal){renderTop(null);app.innerHTML=fatal();return;}
+  if(!S.loaded.e||!S.loaded.p){return;}
+  const r=rol(); renderTop(r);
+  let h;
+  if(!r) h=vSolicitud();
+  else h=({tablero:vTablero,plan:vPlan,guia:vGuia,equipo:vEquipo,cuidadora:vCuid,familia:vFamilia}[ui.view]||vTablero)();
+  app.innerHTML=h;
+  renderSheet();
+  restoreFocus(f);
+  const ids=Object.keys(S.equipo.miembros||{}).concat(S.solicitudes.map(s=>s.id),me?[me]:[]);
+  ensureNames(ids);
+}
+function fatal(){
+  if(ui.fatal==='nodb') return '<div class="panel center"><h2>No se pudo abrir la app</h2><p>Este navegador no permite guardar datos. Abrí el archivo en Chrome, Safari o Edge, fuera del modo privado.</p></div>';
+  return '<div class="panel center"><h2>Se perdió el acceso</h2><p>Tu acceso a esta página cambió. Volvé a abrir el enlace o pedile acceso a la coordinación.</p></div>';
+}
+function selector(list,cur,attr){
+  if(list.length<2) return '';
+  return '<div class="seg">'+list.map(pid=>'<button data-'+attr+'="'+pid+'" aria-pressed="'+(pid===cur)+'">'+esc(S.pacientes[pid].nombre)+'</button>').join('')+'</div>';
+}
+function curPid(){const l=misPacientes();if(!l.length)return null;if(!ui.pid||!l.includes(ui.pid))ui.pid=l[0];return ui.pid;}
+
+/* Solicitud de acceso */
+function codeBox(){
+  const bad=loadCode();
+  return '<div class="field"><label for="acc-code">Código de acceso personal</label><div class="code-in"><input id="acc-code" inputmode="text" autocomplete="off" maxlength="8" style="font-size:20px" value="'+esc(draft('acc-code'))+'" aria-label="Código de acceso"><button class="btn primary" data-act="usecode" style="padding:0 18px;border-radius:12px">Entrar</button></div>'+
+    (bad?'<p class="note" style="color:var(--crit)">El código guardado ('+esc(bad)+') ya no está activo. Pedile uno nuevo a la coordinación.</p>':'<p class="note">Te lo da la coordinación de CuidaCasa. Lo escribís una sola vez en este dispositivo.</p>')+'</div>';
+}
+function vSolicitud(){
+  const mine=me&&S.solicitudes.find(s=>s.id===me);
+  if(!me) return '<div class="panel center"><p class="eyebrow">Bienvenida</p><h2>Ingresá a CuidaCasa</h2><p>Escribí el código de acceso que te pasó la coordinación.</p>'+codeBox()+'</div>';
+  if(mine) return '<div class="panel center"><p class="eyebrow">Solicitud enviada</p><h2>Esperando la aprobación de la coordinación</h2><p>Pediste acceso como <b>'+ROLES[mine.rol]+'</b>. Cuando la coordinación te asigne un paciente, esta pantalla cambia sola.</p><p class="note">'+esc(mine.msg||'')+'</p><button class="btn ghost" data-act="cancelreq">Cancelar solicitud</button></div>';
+  return '<div class="panel center"><p class="eyebrow">Bienvenida</p><h2>Pedí acceso a CuidaCasa</h2><p>La coordinación revisa tu pedido y te asigna el paciente que acompañás.</p>'+
+    '<div class="field"><label for="req-rol">Soy</label><select id="req-rol"><option value="cuidadora">Cuidadora</option><option value="familia">Familiar de un paciente</option><option value="coordinacion">Parte de la coordinación</option></select></div>'+
+    '<div class="field"><label for="req-msg">¿A quién acompañás?</label><textarea id="req-msg" placeholder="Ej.: Soy Marta, cuido a Elena Ruiz de lunes a viernes">'+esc(draft('req-msg'))+'</textarea></div>'+
+    '<button class="btn primary" data-act="sendreq" style="padding:11px">Enviar pedido</button><div style="border-top:1px solid var(--line);padding-top:14px">'+codeBox()+'</div>'+(ui.readOnly?'<p class="note">Tu acceso a esta página es solo de lectura. La coordinación tiene que darte permiso para usarla (“Puede usar”) desde el menú Compartir.</p>':'')+'</div>';
+}
+
+/* Cuidadora */
+function vCuid(){
+  const pid=curPid(), c=now().min;
+  if(!pid) return '<div class="panel center"><h2>Todavía no tenés pacientes asignados</h2><p>La coordinación te va a asignar el domicilio donde trabajás.</p></div>';
+  const p=S.pacientes[pid],d=dia(pid),ci=d.checkin,co=d.checkout,coord=rol()==='coordinacion';
+  const head='<div class="view-head"><div><h1>'+(coord?'Vista de la cuidadora':'Mi turno')+'</h1><p>'+fechaTxt(S.fecha)+' · turno '+hhmm(p.turno[0])+' a '+hhmm(p.turno[1])+'. Cada registro guarda la hora automáticamente.</p></div>'+selector(misPacientes(),pid,'pid')+'</div>';
+  let body='';
+  if(!ci){
+    body='<div class="checkin"><p class="eyebrow">Al llegar al domicilio</p><h3 style="font-size:20px">Registrá tu ingreso</h3><p style="color:var(--ink-2);margin:0">Escaneá con la cámara del celular el QR pegado en la puerta, o escribí el código de 4 números que figura debajo.</p>'+
+      '<div class="code-in"><input id="code-'+pid+'" inputmode="numeric" maxlength="4" autocomplete="off" aria-label="Código del domicilio" value="'+esc(draft('code-'+pid))+'"><button class="btn primary" data-act="checkin" style="padding:0 18px;border-radius:12px">Ingresar</button></div></div>';
+  } else {
+    const ts=tareas(pid),cm=cumplimiento(pid,c),hechas=ts.filter(t=>regDe(pid,t.key)).length;
+    const g={ahora:[],omitida:[],proxima:[],hecha:[]};
+    ts.forEach(tk=>{const e=estado(pid,tk,c);g[e==='tarde'?'hecha':e].push(tk);});
+    const card=tk=>{
+      const e=estado(pid,tk,c),r=regDe(pid,tk.key),T=TIPOS[tk.it.tipo];
+      const chip={hecha:'<span class="chip good">Hecha '+(r?hhmm(r.t):'')+'</span>',tarde:'<span class="chip warn">Fuera de horario '+(r?hhmm(r.t):'')+'</span>',ahora:'<span class="chip acc">Ahora</span>',omitida:'<span class="chip crit">Atrasada</span>',proxima:'<span class="chip info">Próxima</span>'}[e];
+      const dis=(r||co)?' disabled':'';
+      return '<button class="task '+(e==='tarde'?'hecha':e)+'" data-task="'+tk.key+'"'+dis+'><span class="hr num">'+hhmm(tk.t)+'</span><span><span class="lbl">'+ico(T.ico)+esc(T.n)+'</span><span class="obj">'+esc(r?describe(r):tk.it.obj)+'</span></span>'+chip+'</button>';
+    };
+    const sec=(t,a)=>a.length?'<p class="group-t">'+t+'</p>'+a.map(card).join(''):'';
+    body='<div class="shift-bar"><span><b>Ingreso '+hhmm(ci.t)+'</b> · '+(ci.qr?'QR del domicilio':'código del domicilio')+'</span><span class="num">'+hechas+'/'+ts.length+' tareas</span></div><div class="prog"><i style="width:'+pct(hechas,ts.length)+'%"></i></div>'+
+      (co?'<div class="shift-bar"><span><b>Turno cerrado a las '+hhmm(co.t)+'</b></span><span class="chip good">Salida registrada</span></div>':'')+
+      (ts.length?'':'<div class="empty">El plan de cuidados todavía no tiene tareas. Avisale a la coordinación.</div>')+
+      sec('Para hacer ahora',g.ahora)+sec('Atrasadas',g.omitida)+sec('Próximas',g.proxima)+sec('Hechas',g.hecha);
+  }
+  const dock=(ci&&!co)?'<div class="dock-space"></div><div class="dock"><div class="dock-in"><button class="btn" data-act="nov">Novedad</button><button class="btn crit" data-act="caida">Reportar caída</button><button class="btn" data-act="out">Cerrar turno</button></div></div>':'';
+  const phone='<div class="phone"><div class="screen"><div class="app-head"><div class="s">'+hhmm(c)+' · '+esc(p.barrio||'')+'</div><h2>'+esc(p.nombre)+(p.edad?', '+p.edad:'')+'</h2><div class="s">'+esc(p.dir||'')+'</div></div><div class="app-body">'+body+'</div></div></div>';
+  const recorda='<div class="panel recorda"><h3>Recordá</h3><ul><li>Registrá cada tarea en el momento: la hora se guarda sola.</li><li>Si notás algo raro (piel enrojecida, no quiere comer, fiebre), cargalo como novedad.</li><li>Ante una caída, primero asistí a la persona y después reportala.</li></ul></div>';
+  return head+'<div class="cuid-col">'+recorda+phone+'</div>'+dock;
+}
+function renderSheet(){
+  const host=document.getElementById('sheet'),sh=ui.sheet;
+  if(!sh){host.innerHTML='';return;}
+  const pid=sh.pid,c=now().min;
+  if(sh.kind==='task'){
+    const tk=tareas(pid).find(t=>t.key===sh.key); if(!tk){ui.sheet=null;host.innerHTML='';return;}
+    const tp=tk.it.tipo; let opts=[],multi=false,extra='';
+    if(tp==='hidratacion') opts=['50','100','150','200','250','Rechazó'].map(x=>[x,x==='Rechazó'?x:x+' ml']);
+    if(tp==='alimentacion') opts=['0','25','50','75','100'].map(x=>[x,x+'%']);
+    if(tp==='postural') opts=['Decúbito lateral izq.','Decúbito lateral der.','Supino','Sentado'].map(x=>[x,x]);
+    if(tp==='medicacion') opts=['Administrada','Rechazada','No disponible'].map(x=>[x,x]);
+    if(tp==='higiene'){multi=true;opts=['Cambio de pañal','Higiene en cama','Baño asistido','Control de piel'].map(x=>[x,x]);
+      extra='<p class="eyebrow" style="margin:0">Estado de la piel</p><div class="opts">'+['Sin lesiones','Zona enrojecida','Lesión abierta'].map(x=>'<button class="opt" data-piel="'+x+'" aria-pressed="'+(sh.piel===x)+'">'+x+'</button>').join('')+'</div>';}
+    const ok=multi?(sh.sel&&sh.sel.length&&sh.piel):!!sh.sel;
+    const q={alimentacion:'¿Cuánto comió?',hidratacion:'¿Cuánto tomó?',postural:'¿En qué posición quedó?',medicacion:'¿Qué pasó?',higiene:'¿Qué hiciste?'}[tp];
+    host.innerHTML='<div class="sheet-bg" data-act="close"><div class="sheet" role="dialog" aria-modal="true" aria-label="'+esc(TIPOS[tp].n)+'"><p class="eyebrow" style="margin:0">'+q+'</p><h3>'+TIPOS[tp].n+' · '+hhmm(tk.t)+'</h3><p style="margin:0;color:var(--ink-2)">'+esc(tk.it.obj)+'</p><div class="opts">'+
+      opts.map(([v,l])=>'<button class="opt" data-opt="'+esc(v)+'" aria-pressed="'+(multi?(sh.sel||[]).includes(v):sh.sel===v)+'">'+esc(l)+'</button>').join('')+'</div>'+extra+
+      '<div style="display:flex;gap:8px"><button class="btn ghost" data-act="close" style="flex:1;padding:12px">Cancelar</button><button class="btn primary" data-act="save" style="flex:2;padding:12px"'+(ok&&!sh.busy?'':' disabled')+'>Registrar a las '+hhmm(c)+'</button></div></div></div>';
+    return;
+  }
+  if(sh.kind==='nov'||sh.kind==='caida'){
+    const caida=sh.kind==='caida';
+    host.innerHTML='<div class="sheet-bg" data-act="close"><div class="sheet" role="dialog" aria-modal="true"><p class="eyebrow" style="margin:0">'+(caida?'Evento':'Novedad del turno')+'</p><h3>'+(caida?'Reportar una caída':'¿Qué observaste?')+'</h3><p style="margin:0;color:var(--ink-2)">'+(caida?'La coordinación recibe la alerta en su tablero. Contá cómo está la persona y dónde ocurrió.':'La coordinación lo revisa antes de que lo vea la familia.')+'</p>'+
+      '<label class="eyebrow" for="novtxt" style="margin:0">Descripción</label><textarea id="novtxt" placeholder="'+(caida?'Ej.: se resbaló al levantarse, está consciente, le duele la cadera derecha':'Ej.: la zona sacra está enrojecida')+'">'+esc(draft('novtxt'))+'</textarea>'+
+      '<div style="display:flex;gap:8px"><button class="btn ghost" data-act="close" style="flex:1;padding:12px">Cancelar</button><button class="btn primary" data-act="savenov" style="flex:2;padding:12px"'+(sh.busy?' disabled':'')+'>Enviar a la coordinación</button></div></div></div>';
+    return;
+  }
+  if(sh.kind==='escala'){
+    const E=ESCALAS[sh.key],a=sh.ans,s=escalaScore(sh.key,a);
+    const done=E.items.filter(it=>a[it.id]!==undefined).length;
+    host.innerHTML='<div class="sheet-bg" data-act="close"><div class="sheet" role="dialog" aria-modal="true" aria-label="'+esc(E.t)+'" style="max-width:560px"><p class="eyebrow" style="margin:0">'+esc(E.q)+' · '+esc(E.rango)+'</p><h3>'+esc(E.t)+'</h3><p style="margin:0;color:var(--ink-2);font-size:14px">'+esc(E.ayuda)+'</p>'+
+      E.items.map(it=>'<div class="esc-it"><b>'+esc(it.l)+'</b><div class="opts">'+
+        (it.multi?'<button class="opt sm" data-ei="'+it.id+'" data-ev="none" aria-pressed="'+(Array.isArray(a[it.id])&&!a[it.id].length)+'">'+esc(it.none)+'</button>':'')+
+        it.o.map((o,i)=>'<button class="opt sm" data-ei="'+it.id+'" data-ev="'+i+'" aria-pressed="'+(it.multi?(a[it.id]||[]).includes(i):a[it.id]===i)+'">'+esc(o[1])+' <span class="pts">'+o[0]+'</span></button>').join('')+'</div></div>').join('')+
+      '<div class="esc-tot"><span>'+(s!=null?'<b class="num" style="font-size:20px">'+s+' puntos</b> · '+esc(escalaTxt(sh.key,s)):'Respondidos '+done+' de '+E.items.length)+'</span></div>'+
+      '<div style="display:flex;gap:8px"><button class="btn ghost" data-act="close" style="flex:1;padding:12px">Cancelar</button><button class="btn primary" data-act="saveesc" style="flex:2;padding:12px"'+(s==null?' disabled':'')+'>Guardar valoración</button></div></div></div>';
+    return;
+  }
+  if(sh.kind==='confirm'){
+    host.innerHTML='<div class="sheet-bg" data-act="close"><div class="sheet" role="dialog" aria-modal="true"><h3>'+esc(sh.title)+'</h3><p style="margin:0;color:var(--ink-2)">'+esc(sh.text)+'</p><div style="display:flex;gap:8px"><button class="btn ghost" data-act="close" style="flex:1;padding:12px">Cancelar</button><button class="btn primary" data-act="confirm" style="flex:2;padding:12px">'+esc(sh.ok)+'</button></div></div></div>';
+  }
+}
+
+/* Tablero */
+function vTablero(){
+  const c=now().min,al=alertas(c),abiertas=al.filter(a=>!a.ack),pids=activos();
+  if(!pids.length) return '<div class="panel center"><p class="eyebrow">Primer paso</p><h2>Cargá el primer paciente</h2><p>Con el paciente cargado, su plan de cuidados y la cuidadora asignada, el tablero empieza a mostrar presencia, tareas y alertas en tiempo real.</p><button class="btn primary" data-view="plan" style="padding:11px">Ir a Pacientes y planes</button></div>';
+  const ini=pids.filter(pid=>c>=S.pacientes[pid].turno[0]),pres=ini.filter(pid=>dia(pid).checkin).length;
+  let prog=0,ok=0; pids.forEach(pid=>{const x=cumplimiento(pid,c);prog+=x.prog;ok+=x.ok;});
+  const crit=abiertas.filter(a=>a.sev==='crit').length,cu=pct(ok,prog),pend=S.consultas.filter(q=>!q.resp).length;
+  const kp=(l,v,s,cls)=>'<div class="panel kpi"><div class="eyebrow">'+l+'</div><div class="v num"'+(cls?' style="color:var(--'+cls+')"':'')+'>'+v+'</div><div class="s">'+s+'</div></div>';
+  let h='<div class="view-head"><div><h1>Tablero de supervisión</h1><p>'+fechaTxt(S.fecha)+' · '+hhmm(c)+' · '+pids.length+' domicilios. Se actualiza solo cuando las cuidadoras registran.</p></div></div>';
+  h+='<div class="kpis">'+kp('Presencia verificada',ini.length?pct(pres,ini.length)+'%':'—',pres+' de '+ini.length+' turnos iniciados · meta ≥ 95%',!ini.length?'':pres<ini.length?'crit':'good')+
+    kp('Tareas en horario',prog?cu+'%':'—',ok+' de '+prog+' tareas vencidas · meta ≥ 90%',!prog?'':cu>=90?'good':cu>=70?'warn':'crit')+
+    kp('Alertas abiertas',abiertas.length,crit===1?'1 crítica':crit+' críticas',crit?'crit':abiertas.length?'warn':'good')+
+    kp('Consultas de familias',pend,'sin responder',pend?'warn':'')+'</div>';
+  h+='<div class="board"><section class="panel"><div class="panel-h"><h2>Alertas</h2><span class="chip '+(crit?'crit':'info')+'">'+abiertas.length+' abiertas</span></div>'+
+    (al.length?al.map(a=>{const p=S.pacientes[a.pid];return '<div class="alert '+a.sev+(a.ack?' done':'')+'"><span class="bar"></span><div><div class="t1">'+esc(a.t1)+'</div><div class="t2">'+esc(p.nombre)+' · '+esc(a.t2)+'</div><div class="t2 num">Desde '+hhmm(a.t)+(a.ack?' · gestionada a las '+hhmm(a.ack.t)+' por '+esc(nombre(a.ack.by))+' ('+Math.max(0,a.ack.t-a.t)+' min)':'')+'</div></div>'+(a.ack?'<span class="chip good">Gestionada</span>':'<button class="btn" data-ack="'+a.id+'" data-apid="'+a.pid+'">Marcar gestionada</button>')+'</div>';}).join(''):'<div class="empty">Sin alertas. Todo lo programado hasta ahora está registrado.</div>')+'</section>';
+  h+='<section class="panel"><div class="panel-h"><h2>Domicilios</h2></div>'+pids.map(pid=>{
+    const p=S.pacientes[pid],d=dia(pid),ci=d.checkin,x=cumplimiento(pid,c),meta=metaLiq(pid),liq=liquidos(pid),hasPos=(p.plan||[]).some(i=>i.tipo==='postural'),u=hasPos?ultimoPostural(pid):null;
+    const cuid=personasDe(pid,'cuidadora').map(nombre).join(', ')||'Sin cuidadora asignada';
+    const est=!ci?(c>p.turno[0]+15?'<span class="chip crit">Sin llegada</span>':'<span class="chip info">Aún no inicia</span>'):d.checkout?'<span class="chip info">Turno cerrado '+hhmm(d.checkout.t)+'</span>':'<span class="chip good">En domicilio desde '+hhmm(ci.t)+'</span>';
+    const bar=(v,cls)=>'<div class="mini"><i style="width:'+Math.min(100,Math.max(0,v))+'%;background:var(--'+cls+')"></i></div>';
+    const mins=u!==null&&ci&&!d.checkout?c-u:null;
+    const nvl=nivel(p.val);
+    return '<div class="pt"><div class="pt-top"><b>'+esc(p.nombre)+(nvl?' <span class="chip '+nvl.cls+'" title="'+esc(nvl.t)+'">Nivel '+nvl.n+'</span>':'')+'</b>'+est+'</div><div style="font-size:13px;color:var(--ink-2)">'+esc(cuid)+' · turno '+hhmm(p.turno[0])+'–'+hhmm(p.turno[1])+'</div>'+
+      '<div class="metrics"><div class="metric"><div class="l">Tareas en horario</div><div class="m num">'+(x.prog?x.p+'%':'—')+'</div>'+bar(x.prog?x.p:0,x.p>=90?'good':x.p>=70?'warn':'crit')+'</div>'+
+      '<div class="metric"><div class="l">Líquidos</div><div class="m num">'+(meta?liq+' / '+meta+' ml':'—')+'</div>'+(meta?bar(pct(liq,meta),'accent'):'')+'</div>'+
+      '<div class="metric"><div class="l">Último cambio de posición</div><div class="m num">'+(mins===null?'—':'hace '+(mins>=60?Math.floor(mins/60)+' h '+(mins%60)+' min':mins+' min'))+'</div>'+(mins===null?'':bar(mins/150*100,mins>150?'crit':mins>120?'warn':'good'))+'</div></div></div>';
+  }).join('')+'</section></div>';
+  h+='<section class="panel" style="margin-top:18px"><div class="panel-h"><h2>Consultas de las familias</h2></div>'+(S.consultas.length?S.consultas.slice(0,40).map(q=>{
+    const p=S.pacientes[q.pid]||{nombre:'Paciente'};
+    return '<div class="cq"><div><b>'+esc(nombre(q.by))+'</b> · '+esc(p.nombre)+' <span class="note num">'+fechaTxt(q.fecha)+' '+hhmm(q.t)+'</span></div><div>'+esc(q.txt)+'</div>'+
+      (q.resp?'<div class="reply"><b>Respuesta de '+esc(nombre(q.resp.by))+' ('+hhmm(q.resp.t)+'):</b> '+esc(q.resp.txt)+'</div>':
+      '<label class="note" for="resp-'+q.id+'">Responder</label><textarea id="resp-'+q.id+'">'+esc(draft('resp-'+q.id))+'</textarea><div><button class="btn primary" data-resp="'+q.id+'">Enviar respuesta</button></div>')+'</div>';
+  }).join(''):'<div class="empty">Todavía no hay consultas. Las que escriban las familias desde su portal aparecen acá.</div>')+'</section>';
+  return h;
+}
+
+/* Pacientes y planes */
+const barthelTxt=v=>v<20?'Dependencia total':v<=35?'Dependencia severa':v<=55?'Dependencia moderada':v<100?'Dependencia leve':'Independiente';
+const bradenTxt=v=>v<=9?'Riesgo muy alto':v<=12?'Riesgo alto':v<=14?'Riesgo moderado':v<=18?'Riesgo bajo':'Sin riesgo';
+/* ---------- escalas de valoración ---------- */
+const ESCALAS={
+  barthel:{t:'Índice de Barthel',q:'Actividades básicas de la vida diaria',rango:'0 a 100',ayuda:'Registrá lo que la persona hace habitualmente, no lo que podría hacer. Si dudás entre dos opciones, elegí la de menor puntaje.',items:[
+    {id:'comer',l:'Comer',o:[[10,'Independiente'],[5,'Necesita ayuda para cortar, untar o servir'],[0,'Dependiente']]},
+    {id:'banarse',l:'Bañarse',o:[[5,'Independiente (entra y sale solo)'],[0,'Dependiente']]},
+    {id:'vestirse',l:'Vestirse',o:[[10,'Independiente, incluye botones y cordones'],[5,'Necesita ayuda, hace al menos la mitad solo'],[0,'Dependiente']]},
+    {id:'arreglarse',l:'Arreglarse (cara, pelo, dientes, afeitado)',o:[[5,'Independiente'],[0,'Dependiente']]},
+    {id:'deposicion',l:'Deposiciones',o:[[10,'Continente'],[5,'Accidente ocasional (máx. 1 por semana)'],[0,'Incontinente o necesita enemas']]},
+    {id:'miccion',l:'Micción',o:[[10,'Continente o maneja solo la sonda'],[5,'Accidente ocasional (máx. 1 cada 24 h)'],[0,'Incontinente o sondado sin autonomía']]},
+    {id:'retrete',l:'Uso del retrete',o:[[10,'Independiente'],[5,'Necesita ayuda pero hace algo solo'],[0,'Dependiente']]},
+    {id:'traslado',l:'Traslado cama–sillón',o:[[15,'Independiente'],[10,'Mínima ayuda física o supervisión'],[5,'Gran ayuda, pero se mantiene sentado solo'],[0,'Dependiente, no se mantiene sentado']]},
+    {id:'deambular',l:'Deambulación',o:[[15,'Camina 50 m solo (con o sin bastón)'],[10,'Camina 50 m con ayuda o supervisión'],[5,'Independiente en silla de ruedas'],[0,'Dependiente']]},
+    {id:'escalones',l:'Subir y bajar escalones',o:[[10,'Independiente'],[5,'Necesita ayuda o supervisión'],[0,'Dependiente']]}]},
+  braden:{t:'Escala de Braden',q:'Riesgo de úlcera por presión',rango:'6 a 23',ayuda:'Un puntaje más bajo indica más riesgo. Revisá la piel de sacro, talones, caderas y codos.',items:[
+    {id:'percepcion',l:'Percepción sensorial',o:[[1,'Completamente limitada'],[2,'Muy limitada'],[3,'Ligeramente limitada'],[4,'Sin limitaciones']]},
+    {id:'humedad',l:'Exposición a la humedad',o:[[1,'Constantemente húmeda'],[2,'A menudo húmeda'],[3,'Ocasionalmente húmeda'],[4,'Raramente húmeda']]},
+    {id:'actividad',l:'Actividad',o:[[1,'Encamada'],[2,'En silla'],[3,'Camina ocasionalmente'],[4,'Camina con frecuencia']]},
+    {id:'movilidad',l:'Movilidad',o:[[1,'Completamente inmóvil'],[2,'Muy limitada'],[3,'Ligeramente limitada'],[4,'Sin limitaciones']]},
+    {id:'nutricion',l:'Nutrición',o:[[1,'Muy pobre'],[2,'Probablemente inadecuada'],[3,'Adecuada'],[4,'Excelente']]},
+    {id:'friccion',l:'Fricción y deslizamiento',o:[[1,'Es un problema'],[2,'Problema potencial'],[3,'Sin problema aparente']]}]},
+  downton:{t:'Escala de Downton',q:'Riesgo de caídas',rango:'0 a 11',ayuda:'Sumá un punto por cada factor presente. En medicamentos y déficits podés marcar más de uno.',items:[
+    {id:'previas',l:'Caídas previas',o:[[0,'No'],[1,'Sí']]},
+    {id:'meds',l:'Medicamentos',multi:true,none:'Ninguno de estos',o:[[1,'Tranquilizantes o sedantes'],[1,'Diuréticos'],[1,'Hipotensores (no diuréticos)'],[1,'Antiparkinsonianos'],[1,'Antidepresivos']]},
+    {id:'sens',l:'Déficits sensoriales',multi:true,none:'Ninguno',o:[[1,'Alteraciones visuales'],[1,'Alteraciones auditivas'],[1,'En extremidades (ictus, neuropatía)']]},
+    {id:'mental',l:'Estado mental',o:[[0,'Orientado'],[1,'Confuso']]},
+    {id:'deamb',l:'Deambulación',o:[[0,'Normal'],[1,'Segura con ayuda'],[1,'Insegura, con o sin ayuda'],[0,'Imposible']]}]},
+  mna:{t:'MNA-SF (Mini Nutritional Assessment)',q:'Estado nutricional',rango:'0 a 14',ayuda:'Preguntá por los últimos 3 meses. Si no podés pesar ni medir, usá la circunferencia de pantorrilla.',items:[
+    {id:'ingesta',l:'¿Comió menos por falta de apetito, problemas digestivos o para masticar o tragar?',o:[[0,'Mucho menos'],[1,'Algo menos'],[2,'Igual que siempre']]},
+    {id:'peso',l:'Pérdida de peso en los últimos 3 meses',o:[[0,'Más de 3 kg'],[1,'No sabe'],[2,'Entre 1 y 3 kg'],[3,'Sin pérdida']]},
+    {id:'movilidad',l:'Movilidad',o:[[0,'De la cama al sillón'],[1,'Se mueve dentro de la casa'],[2,'Sale de la casa']]},
+    {id:'estres',l:'Enfermedad aguda o estrés psicológico en los últimos 3 meses',o:[[0,'Sí'],[2,'No']]},
+    {id:'neuro',l:'Problemas neuropsicológicos',o:[[0,'Demencia o depresión grave'],[1,'Demencia leve'],[2,'Sin problemas']]},
+    {id:'imc',l:'IMC (o circunferencia de pantorrilla)',o:[[0,'IMC menor de 19'],[1,'IMC 19 a menos de 21'],[2,'IMC 21 a menos de 23'],[3,'IMC 23 o más'],[0,'Pantorrilla menor de 31 cm'],[3,'Pantorrilla 31 cm o más']]}]}
+};
+function escalaScore(key,ans){const E=ESCALAS[key];let s=0;for(const it of E.items){const a=ans[it.id];if(a===undefined)return null;if(it.multi)a.forEach(i=>{s+=it.o[i][0];});else s+=it.o[a][0];}return s;}
+const downtonTxt=v=>v>=3?'Riesgo alto de caídas':'Riesgo bajo de caídas';
+const mnaTxt=v=>v>=12?'Estado nutricional normal':v>=8?'Riesgo de malnutrición':'Malnutrición';
+const escalaTxt=(k,v)=>({barthel:barthelTxt,braden:x=>bradenTxt(x)+' de úlcera por presión',downton:downtonTxt,mna:mnaTxt})[k](v);
+const escalaCls=(k,v)=>({barthel:v<=35?'crit':v<=55?'warn':'good',braden:v<=14?'crit':v<=18?'warn':'good',downton:v>=3?'warn':'good',mna:v<=7?'crit':v<=11?'warn':'good'})[k];
+function nivel(v){
+  v=v||{}; if(v.barthel==null&&v.braden==null) return null;
+  const r=[];
+  if(v.barthel!=null&&v.barthel<=35) r.push('Barthel '+v.barthel); if(v.braden!=null&&v.braden<=14) r.push('Braden '+v.braden); if(v.nutricion==='Desnutrición') r.push('malnutrición');
+  if(r.length) return {n:'C',t:'Nivel C · alta complejidad',cls:'crit',r};
+  if(v.barthel!=null&&v.barthel<=55) r.push('Barthel '+v.barthel); if(v.braden!=null&&v.braden<=18) r.push('Braden '+v.braden); if(v.caidas==='Alto') r.push('riesgo alto de caídas'); if(v.nutricion==='En riesgo') r.push('riesgo nutricional');
+  if(r.length) return {n:'B',t:'Nivel B · complejidad moderada',cls:'warn',r};
+  return {n:'A',t:'Nivel A · baja complejidad',cls:'good',r:['sin criterios de mayor complejidad']};
+}
+const VISITAS={A:'1 visita de supervisión por mes',B:'1 visita cada 15 días',C:'1 visita por semana'};
+function diasDesde(f){if(!f)return null;return Math.round((Date.parse(S.fecha)-Date.parse(f))/864e5);}
+function recomendaciones(p){
+  const v=p.val||{},plan=p.plan||[],tiene=t=>plan.some(i=>i.tipo===t),out=[];
+  if(v.braden!=null&&v.braden<=18) out.push({txt:'Cambios de posición cada 2 h'+(v.braden<=12?', superficie de alivio de presión (colchón de aire) y control de piel en cada higiene':' y control de piel diario')+'.',tipo:tiene('postural')?null:'postural'});
+  if(v.barthel!=null&&v.barthel<=35) out.push({txt:'Asistencia total en las actividades diarias: higiene en cama al menos 2 veces por turno y alimentación asistida.',tipo:tiene('higiene')?null:'higiene'});
+  else if(v.barthel!=null&&v.barthel<=55) out.push({txt:'Supervisión y ayuda parcial en higiene, vestido y traslados.',tipo:null});
+  if(v.barthel!=null&&v.barthel<=55) out.push({txt:'Ofrecer líquidos cada 2 h y registrar lo que toma.',tipo:tiene('hidratacion')?null:'hidratacion'});
+  if(v.caidas==='Alto') out.push({txt:'Prevención de caídas: acompañar siempre al caminar y al ir al baño, retirar alfombras, luz nocturna, calzado cerrado y timbre o celular a mano.',tipo:null});
+  if(v.nutricion==='En riesgo'||v.nutricion==='Desnutrición') out.push({txt:'Registrar el porcentaje de ingesta en cada comida y pesar una vez por mes'+(v.nutricion==='Desnutrición'?'; interconsulta con nutrición y médico de cabecera':'')+'.',tipo:tiene('alimentacion')?null:'alimentacion'});
+  const d=diasDesde(v.fecha);
+  if(d!=null&&d>90) out.push({txt:'La última valoración tiene '+d+' días: corresponde revalorar.',tipo:null,warn:true});
+  return out;
+}
+function planDesdeValoracion(p){
+  const v=p.val||{},t0=p.turno[0],t1=p.turno[1],en=hs=>hs.filter(h=>h>=t0&&h<t1);
+  const b=v.barthel,br=v.braden,caidas=v.caidas==='Alto',nut=v.nutricion,dep=b!=null&&b<=55,total=b!=null&&b<=35;
+  const prev=p.plan||[],meds=prev.filter(i=>i.tipo==='medicacion'),prevMeta=(prev.find(i=>i.tipo==='hidratacion')||{}).meta;
+  const plan=[];
+  if((br!=null&&br<=18)||total) plan.push({id:'pos',tipo:'postural',cada:2,desde:t0+30,obj:'Rotar: lateral izq. → supino → lateral der.'+(br!=null&&br<=12?' Usar colchón de aire y revisar sacro y talones.':'')});
+  plan.push({id:'hid',tipo:'hidratacion',cada:dep?2:3,desde:t0+30,obj:dep?'Ofrecer 200 ml y ayudar a tomar':'Recordar y ofrecer líquidos',meta:prevMeta||1200});
+  const riesgoNut=nut==='En riesgo'||nut==='Desnutrición',comidas=en(riesgoNut?[540,780,990,1110]:[540,780,1110]);
+  if(comidas.length) plan.push({id:'ali',tipo:'alimentacion',horas:comidas,obj:(total?'Alimentación asistida':dep?'Ayudar y supervisar la comida':'Supervisar la comida')+(riesgoNut?'. Registrar % de ingesta; a las 16:30 ofrecer colación':'')+(nut==='Desnutrición'?'. Avisar a la coordinación si come menos de la mitad':'')});
+  let hig=en(br!=null&&br<=12?[600,840,1080]:total?[600,1080]:[600]); if(!hig.length) hig=[t0+60];
+  plan.push({id:'hig',tipo:'higiene',horas:hig,obj:(total?'Higiene en cama, cambio de pañal y control de piel':dep?'Ayuda en higiene y control de piel':'Supervisar la higiene y controlar la piel')+(caidas?'. Acompañar siempre al baño (riesgo de caídas)':'')});
+  if(meds.length) meds.forEach(m=>plan.push(m)); else plan.push({id:'med',tipo:'medicacion',horas:en([540]).length?[540]:[t0+60],obj:'Indicar fármaco y dosis'});
+  return plan;
+}
+function vGuia(){
+  const tr=(a)=>'<tr>'+a.map(x=>'<td>'+x+'</td>').join('')+'</tr>';
+  const tbl=(head,rows)=>'<div class="tbl-wrap"><table><thead><tr>'+head.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map(tr).join('')+'</tbody></table></div>';
+  const sec=(t,b)=>'<section class="panel" style="margin-bottom:18px"><div class="panel-h"><h2>'+t+'</h2></div><div class="val" style="gap:10px">'+b+'</div></section>';
+  let h='<div class="view-head"><div><h1>Guía de valoración</h1><p>Cómo valorar a cada paciente con las cuatro escalas, clasificarlo en un nivel de cuidado y llevar el resultado al plan.</p></div></div>';
+  h+=sec('1. Cuándo y quién valora','<ul style="margin:0;padding-left:18px;display:grid;gap:4px;color:var(--ink-2)"><li><b>Al ingreso</b>, antes del primer turno de la cuidadora.</li><li><b>Cada 90 días</b>: la app avisa cuando la valoración está vencida.</li><li><b>Ante un cambio</b>: internación, caída, úlcera nueva, cambio de medicación o deterioro notorio.</li><li>Valora la <b>médica o la enfermera supervisora</b>, en el domicilio, observando y preguntando a la familia y a la cuidadora por las últimas dos semanas.</li></ul>');
+  h+=sec('2. Las cuatro escalas',tbl(['Escala','Qué mide','Puntaje','Interpretación'],[
+    ['<b>Barthel</b>','Dependencia en 10 actividades básicas','0–100','&lt; 20 total · 20–35 severa · 40–55 moderada · ≥ 60 leve · 100 independiente'],
+    ['<b>Braden</b>','Riesgo de úlcera por presión (6 ítems)','6–23','≤ 9 muy alto · 10–12 alto · 13–14 moderado · 15–18 bajo · ≥ 19 sin riesgo'],
+    ['<b>Downton</b>','Riesgo de caídas (5 ítems)','0–11','≥ 3 riesgo alto · 0–2 riesgo bajo'],
+    ['<b>MNA-SF</b>','Estado nutricional (6 preguntas)','0–14','12–14 normal · 8–11 riesgo de malnutrición · 0–7 malnutrición']])+'<p class="note" style="margin:0">En Barthel y Braden, a menor puntaje mayor necesidad de cuidado. En Downton, a mayor puntaje mayor riesgo.</p>');
+  h+=sec('3. Clasificación en niveles de cuidado',tbl(['Nivel','Criterio (alcanza con uno)','Supervisión'],[
+    ['<span class="chip crit">C · alta complejidad</span>','Barthel ≤ 35 · Braden ≤ 14 · MNA-SF ≤ 7',VISITAS.C],
+    ['<span class="chip warn">B · complejidad moderada</span>','Barthel 40–55 · Braden 15–18 · Downton ≥ 3 · MNA-SF 8–11',VISITAS.B],
+    ['<span class="chip good">A · baja complejidad</span>','Ninguno de los anteriores',VISITAS.A]])+'<p class="note" style="margin:0">El nivel lo calcula la app con la peor de las escalas. Es una propuesta operativa de CuidaCasa para asignar supervisión y perfil de cuidadora; revisala con criterio clínico.</p>');
+  h+=sec('4. Qué hacer según el resultado',tbl(['Resultado','Indicación para el plan'],[
+    ['Braden ≤ 18','Cambios de posición cada 2 h y control de piel diario.'],
+    ['Braden ≤ 12','Además: superficie de alivio de presión y control de piel en cada higiene.'],
+    ['Barthel ≤ 35','Asistencia total: higiene en cama al menos 2 veces por turno, alimentación asistida.'],
+    ['Barthel ≤ 55','Ofrecer líquidos cada 2 h y registrar; ayuda en higiene, vestido y traslados.'],
+    ['Downton ≥ 3','Prevención de caídas: acompañar al caminar y al baño, retirar alfombras, luz nocturna, calzado cerrado.'],
+    ['MNA-SF 8–11','Registrar la ingesta en cada comida y pesar una vez por mes.'],
+    ['MNA-SF ≤ 7','Además: interconsulta con nutrición y médico de cabecera.']]));
+  h+=sec('5. Paso a paso en la app','<ol style="margin:0;padding-left:20px;display:grid;gap:4px;color:var(--ink-2)"><li>En <b>Pacientes y planes</b>, elegí al paciente.</li><li>En <b>Valoración</b>, tocá <b>Valorar</b> en cada escala y respondé todos los ítems. El puntaje se calcula solo.</li><li>Al guardar <b>Barthel y Braden</b>, la app calcula el <b>nivel de cuidado</b> y <b>arma el plan automáticamente</b>: cambios de posición, hidratación, comidas e higiene con sus horarios e indicaciones. Cada escala nueva que guardes lo vuelve a ajustar.</li><li>Revisá la tabla de tareas: ajustá horarios si hace falta y cargá la <b>medicación</b> indicada, que la app no modifica.</li><li>La cuidadora recibe la agenda nueva desde su próximo registro.</li></ol>');
+  h+='<p class="note" style="max-width:80ch">Referencias: Mahoney y Barthel (1965); Bergstrom y otros (1987), escala de Braden; Downton (1993), riesgo de caídas; Kaiser y otros (2009), MNA-SF.</p>';
+  return h;
+}
+function qrSvg(pid){
+  const p=S.pacientes[pid]; if(!APP_URL||typeof qrcode!=='function') return null;
+  try{const q=qrcode(0,'M');q.addData(APP_URL+'#ingreso-'+pid+'-'+p.codigo);q.make();return q.createSvgTag({cellSize:5,margin:2,scalable:true});}catch(e){return null;}
+}
+function vPlan(){
+  const all=activos();
+  let h='<div class="view-head"><div><h1>Pacientes y planes</h1><p>Cargá cada paciente, su valoración y su plan de cuidados. Cada cambio llega a la app de la cuidadora en el momento.</p></div><button class="btn primary" data-act="newpac" style="padding:10px 14px">Nuevo paciente</button></div>';
+  if(ui.newPac){
+    h+='<section class="panel" style="margin-bottom:18px"><div class="panel-h"><h2>Nuevo paciente</h2></div><div class="val">'+
+      '<div class="grid2"><div class="field"><label for="np-nombre">Nombre y apellido</label><input id="np-nombre" value="'+esc(draft('np-nombre'))+'"></div><div class="field"><label for="np-edad">Edad</label><input id="np-edad" type="number" min="0" max="120" value="'+esc(draft('np-edad'))+'"></div>'+
+      '<div class="field"><label for="np-dir">Dirección</label><input id="np-dir" value="'+esc(draft('np-dir'))+'"></div><div class="field"><label for="np-barrio">Barrio</label><input id="np-barrio" value="'+esc(draft('np-barrio'))+'"></div>'+
+      '<div class="field"><label for="np-t0">Turno desde</label><input id="np-t0" placeholder="08:00" value="'+esc(draft('np-t0','08:00'))+'"></div><div class="field"><label for="np-t1">Turno hasta</label><input id="np-t1" placeholder="20:00" value="'+esc(draft('np-t1','20:00'))+'"></div></div>'+
+      '<p class="note" style="margin:0">Se crea con un plan inicial de cinco tareas que después ajustás. Turnos dentro del mismo día (hasta 24:00).</p><div style="display:flex;gap:8px"><button class="btn ghost" data-act="cancelnew">Cancelar</button><button class="btn primary" data-act="createpac">Crear paciente</button></div></div></section>';
+  }
+  if(!all.length) return h+(ui.newPac?'':'<div class="panel empty">Todavía no hay pacientes. Tocá “Nuevo paciente” para cargar el primero.</div>');
+  if(!ui.planPid||!all.includes(ui.planPid)) ui.planPid=all[0];
+  const pid=ui.planPid,p=S.pacientes[pid],v=p.val||{};
+  h+='<div class="plan-grid"><div class="stack"><section class="panel"><div class="panel-h"><h2>Pacientes</h2><span class="note">'+all.length+'</span></div><div class="plist">'+all.map(k=>'<button data-planpid="'+k+'" aria-pressed="'+(k===pid)+'"><b>'+esc(S.pacientes[k].nombre)+(nivel(S.pacientes[k].val)?' <span class="chip '+nivel(S.pacientes[k].val).cls+'">Nivel '+nivel(S.pacientes[k].val).n+'</span>':'')+'</b><span class="note">'+esc(S.pacientes[k].barrio||'')+' · '+hhmm(S.pacientes[k].turno[0])+'–'+hhmm(S.pacientes[k].turno[1])+'</span></button>').join('')+'</div></section>';
+  const svg=qrSvg(pid);
+  h+='<section class="panel"><div class="panel-h"><h2>Código de ingreso</h2></div><div class="qr">'+(svg?'<div class="box">'+svg+'</div>':'')+'<div><div class="code num">'+esc(p.codigo)+'</div><p class="note" style="margin:4px 0 10px">'+(svg?'Imprimí este QR y pegalo junto a la puerta. La cuidadora lo escanea con la cámara del celular y queda registrado su ingreso.':'La cuidadora escribe este código al llegar.')+'</p><div style="display:flex;gap:6px;flex-wrap:wrap">'+(svg&&dl?'<button class="btn" data-act="dlqr">Descargar QR</button>':'')+'<button class="btn ghost" data-act="newcode">Cambiar código</button></div></div></div></section>';
+  h+='<section class="panel"><div class="panel-h"><h2>Datos</h2></div><div class="val">'+
+    ['nombre','edad','dir','barrio'].map(k=>'<div class="field"><label for="pd-'+k+'">'+({nombre:'Nombre y apellido',edad:'Edad',dir:'Dirección',barrio:'Barrio'})[k]+'</label><input id="pd-'+k+'" data-pd="'+k+'" value="'+esc(p[k]==null?'':p[k])+'"></div>').join('')+
+    '<div class="grid2"><div class="field"><label for="pd-t0">Turno desde</label><input id="pd-t0" data-pd="t0" value="'+hhmm(p.turno[0])+'"></div><div class="field"><label for="pd-t1">Turno hasta</label><input id="pd-t1" data-pd="t1" value="'+hhmm(p.turno[1])+'"></div></div>'+
+    '<button class="btn danger" data-act="baja">Dar de baja</button></div></section></div>';
+  const nv=nivel(v),recs=recomendaciones(p),dv=diasDesde(v.fecha);
+  const card=k=>{const E=ESCALAS[k],val=v[k];return '<div class="esc"><div><div class="eyebrow">'+esc(E.q)+'</div><b>'+esc(E.t.split(' (')[0])+'</b><div class="interp">'+(val!=null?'<span class="chip '+escalaCls(k,val)+' num">'+val+' pts</span> '+esc(escalaTxt(k,val)):'Sin valorar')+'</div></div><button class="btn" data-esc="'+k+'">'+(val!=null?'Revalorar':'Valorar')+'</button></div>';};
+  h+='<div class="stack"><section class="panel"><div class="panel-h"><h2>Valoración</h2>'+(v.fecha?'<span class="note">Última: '+fechaTxt(v.fecha)+(dv>90?' · <b style="color:var(--crit)">vencida</b>':'')+'</span>':'')+'</div><div class="val" style="gap:0;padding:0">'+
+    ['barthel','braden','downton','mna'].map(card).join('')+'</div>'+
+    (nv?'<div class="nivel '+nv.cls+'"><div><div class="eyebrow">Nivel de cuidado</div><b>'+nv.t+'</b><div class="interp">Por: '+esc(nv.r.join(', '))+' · '+VISITAS[nv.n]+'</div></div></div>':'<div class="nivel"><div class="interp">Valorá al menos Barthel y Braden para calcular el nivel de cuidado. <button class="btn ghost" data-view="guia">Ver la guía</button></div></div>')+
+    (recs.length?'<div class="recs"><div class="eyebrow" style="margin-bottom:6px">Recomendaciones para el plan</div>'+recs.map(r=>'<div class="rec"><span'+(r.warn?' style="color:var(--crit)"':'')+'>'+esc(r.txt)+'</span>'+(r.tipo?'<button class="btn" data-addrec="'+r.tipo+'">Agregar al plan</button>':'')+'</div>').join('')+'</div>':'')+'</section>';
+  h+='<section class="panel"><div class="panel-h"><h2>Tareas del plan</h2><span class="note">ventana de cumplimiento ±30 min</span></div><div class="nivel '+(v.planGen?'good':'')+'" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span class="interp" style="margin:0">'+(v.planGen?'Plan armado automáticamente desde la valoración del '+fechaTxt(v.planGen)+'. Podés ajustar horarios e indicaciones; la medicación queda como la cargaste.':'Cuando guardes Barthel y Braden, la app arma este plan sola según los resultados.')+'</span>'+(v.barthel!=null&&v.braden!=null?'<button class="btn" data-act="regen">Rehacer desde la valoración</button>':'')+'</div><div class="tbl-wrap"><table><thead><tr><th>Tarea</th><th>Frecuencia</th><th>Desde / horarios</th><th>Indicación</th><th>Meta</th><th></th></tr></thead><tbody>'+
+    (p.plan||[]).map((it,i)=>{const fija=!!(it.horas&&it.horas.length);return '<tr><td><b>'+TIPOS[it.tipo].n+'</b></td>'+
+      '<td><select id="pi-'+i+'-modo" data-pi="'+i+'" data-pf="modo" aria-label="Frecuencia"><option value="cada"'+(fija?'':' selected')+'>Cada N horas</option><option value="horas"'+(fija?' selected':'')+'>Horarios fijos</option></select></td>'+
+      '<td>'+(fija?'<input id="pi-'+i+'-horas" data-pi="'+i+'" data-pf="horas" value="'+it.horas.map(hhmm).join(', ')+'" aria-label="Horarios">':'<div style="display:flex;gap:6px;align-items:center"><input id="pi-'+i+'-cada" data-pi="'+i+'" data-pf="cada" type="number" min="1" max="8" value="'+it.cada+'" style="width:64px;min-width:64px" aria-label="Cada cuántas horas"> h desde <input id="pi-'+i+'-desde" data-pi="'+i+'" data-pf="desde" value="'+hhmm(it.desde!=null?it.desde:p.turno[0]+30)+'" style="width:76px;min-width:76px" aria-label="Primera hora"></div>')+'</td>'+
+      '<td><input id="pi-'+i+'-obj" data-pi="'+i+'" data-pf="obj" value="'+esc(it.obj)+'" aria-label="Indicación"></td>'+
+      '<td>'+(it.tipo==='hidratacion'?'<input id="pi-'+i+'-meta" data-pi="'+i+'" data-pf="meta" type="number" min="0" step="100" value="'+(it.meta||0)+'" style="width:90px;min-width:90px" aria-label="Meta de líquidos en ml"> ml':'<span class="note">—</span>')+'</td>'+
+      '<td><button class="btn ghost" data-del="'+i+'">Quitar</button></td></tr>';}).join('')+'</tbody></table></div>'+
+    '<div class="add-row"><label for="addtipo" class="note">Agregar tarea</label><select id="addtipo">'+Object.keys(TIPOS).map(k=>'<option value="'+k+'">'+TIPOS[k].n+'</option>').join('')+'</select><button class="btn" data-act="addtask">Agregar</button></div>'+
+    '<div class="panel-h" style="border-top:1px solid var(--line)"><h2 style="font-size:16px">Agenda que recibe la cuidadora hoy</h2><span class="note">'+tareas(pid).length+' tareas</span></div><div class="agenda">'+
+    tareas(pid).map(tk=>{const e=estado(pid,tk,now().min);return '<span class="chip '+({hecha:'good',tarde:'warn',omitida:'crit',ahora:'acc',proxima:'info'}[e])+' num">'+hhmm(tk.t)+' '+TIPOS[tk.it.tipo].n+'</span>';}).join('')+'</div></section></div></div>';
+  return h;
+}
+
+/* Equipo */
+function vEquipo(){
+  const mem=S.equipo.miembros||{},ids=Object.keys(mem),pend=S.solicitudes,all=activos();
+  const av=uid=>{const p=S.names[uid];return '<img alt="" src="'+esc(p?p.avatarUrl:'data:image/gif;base64,R0lGODlhAQABAAAAACw=')+'">';};
+  const checks=(uid,sel)=>'<div class="checks">'+(all.length?all.map(pid=>'<label><input type="checkbox" data-mp="'+uid+'" value="'+pid+'"'+((sel||[]).includes(pid)?' checked':'')+'> '+esc(S.pacientes[pid].nombre)+'</label>').join(''):'<span class="note">Primero cargá pacientes.</span>')+'</div>';
+  let h='<div class="view-head"><div><h1>Equipo</h1><p>Creá un acceso para cada cuidadora y familiar, con sus pacientes. Cada persona ve solo lo de sus pacientes.</p></div></div>';
+  h+='<section class="panel" style="margin-bottom:18px"><div class="panel-h"><h2>Crear acceso con código</h2></div><div class="val">'+
+    '<div class="grid2"><div class="field"><label for="mk-nombre">Nombre</label><input id="mk-nombre" placeholder="Ej.: Marta Gómez" value="'+esc(draft('mk-nombre'))+'"></div>'+
+    '<div class="field"><label for="mk-rol">Rol</label><select id="mk-rol"><option value="cuidadora">Cuidadora</option><option value="familia">Familia</option></select></div></div>'+
+    '<div><span class="note">Pacientes</span>'+checks('nuevo',[])+'</div>'+
+    '<div><button class="btn primary" data-act="mkcode">Crear código</button></div>'+
+    (ui.lastCode?'<div class="chip good" style="white-space:normal;padding:10px 12px;border-radius:10px;font-size:14px">Código de '+esc(ui.lastCode.nombre)+': <b class="num" style="font-size:18px;letter-spacing:.15em">'+esc(ui.lastCode.code)+'</b> · mandáselo junto con el enlace de la app.</div>':'')+
+    '<p class="note" style="margin:0">La persona abre el enlace con su cuenta de Claude (invitada por email con permiso de edición) y escribe este código una sola vez.</p></div></section>';
+  h+='<section class="panel" style="margin-bottom:18px"><div class="panel-h"><h2>Pedidos de acceso</h2><span class="chip '+(pend.length?'warn':'info')+'">'+pend.length+'</span></div>'+(pend.length?pend.map(s=>
+    '<div class="mem">'+av(s.id)+'<div><b>'+esc(nombre(s.id))+'</b> · pide acceso como '+ROLES[s.rol]+'<div class="note">'+esc(s.msg||'')+'</div>'+(s.rol==='coordinacion'?'':checks(s.id,[]))+'</div><div class="acts"><button class="btn primary" data-approve="'+s.id+'">Aprobar</button><button class="btn ghost" data-reject="'+s.id+'">Rechazar</button></div></div>').join(''):'<div class="empty">No hay pedidos pendientes. Compartí el enlace de la app con la cuidadora o la familia: al abrirlo, pueden pedir acceso.</div>')+'</section>';
+  h+='<section class="panel"><div class="panel-h"><h2>Personas con acceso</h2></div>'+(ids.length?ids.map(uid=>{const m=mem[uid];return '<div class="mem">'+av(uid)+'<div><b>'+esc(nombre(uid))+'</b> <span class="chip acc">'+ROLES[m.rol]+'</span>'+(uid.startsWith('c-')?' <span class="chip info num">código '+esc(uid.slice(2))+'</span>':'')+(m.rol==='coordinacion'?'<div class="note">Ve todos los pacientes.</div>':checks(uid,m.pacientes))+'</div><div class="acts">'+(m.rol!=='coordinacion'?'<button class="btn" data-savemp="'+uid+'">Guardar pacientes</button>':'')+'<button class="btn ghost danger" data-removem="'+uid+'">Quitar</button></div></div>';}).join(''):'<div class="empty">Todavía no aprobaste a nadie.</div>')+'</section>';
+  h+='<section class="panel" style="margin-top:18px"><div class="panel-h"><h2>Copia de seguridad</h2></div><div class="val"><p style="margin:0;color:var(--ink-2)">Los datos se guardan solo en este navegador. Descargá una copia seguido y guardala en un lugar seguro: si se borran los datos del navegador, se pierden.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-act="export">Descargar copia</button><label class="btn" for="imp-file" style="cursor:pointer">Restaurar desde una copia</label><input id="imp-file" type="file" accept="application/json,.json" hidden></div></div></section>';
+  h+='<section class="panel" style="margin-top:18px"><div class="panel-h"><h2>Usar este dispositivo como cuidadora o familia</h2></div><div class="val"><p style="margin:0;color:var(--ink-2)">Si la cuidadora usa este mismo celular o tablet, que escriba acá su código. Al terminar, toca Salir y vuelve la vista de coordinación.</p>'+codeBox()+'</div></section>';
+  h+='<p class="note" style="margin-top:16px;max-width:80ch">En esta versión independiente, la cuidadora o la familia usan la app en este mismo dispositivo: entran con su código de acceso y tocan Salir al terminar. Los datos de salud son sensibles: protegé el dispositivo con clave y revisá el consentimiento y el registro de la base según la Ley 25.326.</p>';
+  return h;
+}
+
+/* Familia */
+function vFamilia(){
+  const pid=curPid();
+  if(!pid) return '<div class="panel center"><h2>Todavía no hay un paciente asignado</h2><p>La coordinación te va a vincular con tu familiar.</p></div>';
+  const p=S.pacientes[pid],d=dia(pid),ci=d.checkin,c=now().min,coord=rol()==='coordinacion';
+  let h='<div class="view-head"><div><h1>'+(coord?'Vista de la familia':'Portal familiar')+'</h1><p>El día de '+esc(p.nombre)+', '+fechaTxt(S.fecha)+'. Las novedades llegan después de que la coordinación las revisa.</p></div>'+selector(misPacientes(),pid,'pid')+'</div>';
+  const rs=regs(pid),com=rs.filter(r=>r.tipo==='alimentacion'),pos=rs.filter(r=>r.tipo==='postural'),med=rs.filter(r=>r.tipo==='medicacion');
+  const medProg=tareas(pid).filter(t=>t.it.tipo==='medicacion'&&t.t<=c+30).length,meta=metaLiq(pid);
+  h+='<div class="fam"><div class="stack"><section class="panel"><div class="panel-h"><h2>Hoy</h2>'+(ci?'<span class="chip good">'+esc(nombre(ci.by))+' llegó a las '+hhmm(ci.t)+'</span>':'<span class="chip warn">Todavía no se registró la llegada</span>')+'</div>'+
+    '<div class="fam-sum"><div><div class="v num">'+liquidos(pid)+' ml</div><div class="l">líquidos'+(meta?' de '+meta+' ml':'')+'</div></div><div><div class="v num">'+(com.length?com.map(r=>r.d.pct+'%').join(' · '):'—')+'</div><div class="l">de cada comida</div></div>'+
+    '<div><div class="v num">'+pos.length+'</div><div class="l">cambios de posición'+(pos.length?' · último '+hhmm(pos[pos.length-1].t):'')+'</div></div><div><div class="v num">'+med.filter(r=>r.d.est==='Administrada').length+'/'+medProg+'</div><div class="l">tomas de medicación</div></div></div></section>';
+  const ev=[];
+  if(ci) ev.push({t:ci.t,txt:'Llegada de '+nombre(ci.by)+' (verificada en el domicilio)',c:''});
+  rs.forEach(r=>ev.push({t:r.t,txt:describe(r),c:(r.tipo==='alimentacion'&&r.d.pct<50)||(r.tipo==='medicacion'&&r.d.est!=='Administrada')?'w':''}));
+  let enRev=0;
+  novs(pid).forEach(n=>{const alarm=n.caida||ALARMA.test(n.txt),rev=d.ack&&d.ack['nov-'+n.id];if(alarm&&!rev){enRev++;return;}ev.push({t:n.t,txt:(n.caida?'Caída: ':'Novedad: ')+n.txt+(alarm?' · revisada por la coordinación':''),c:n.caida?'c':alarm?'w':''});});
+  if(d.checkout) ev.push({t:d.checkout.t,txt:'Salida de '+nombre(d.checkout.by),c:''});
+  ev.sort((a,b)=>a.t-b.t);
+  h+='<section class="panel"><div class="panel-h"><h2>Registro del día</h2>'+(enRev?'<span class="chip info">'+enRev+' novedad en revisión</span>':'')+'</div>'+(ev.length?'<ul class="tl">'+ev.map(e=>'<li><span class="h num">'+hhmm(e.t)+'</span><span class="dot '+e.c+'"></span><span>'+esc(e.txt)+'</span></li>').join('')+'</ul>':'<div class="empty">Todavía no hay registros hoy.</div>')+'</section></div>';
+  const mias=S.consultas.filter(q=>q.pid===pid);
+  h+='<aside class="panel"><div class="panel-h"><h2>Consultas</h2></div><div class="form"><label class="eyebrow" for="consulta">Escribile a la coordinación</label><textarea id="consulta" placeholder="Ej.: ¿Pueden avisarme cuando venga el médico de cabecera?">'+esc(draft('consulta'))+'</textarea><button class="btn primary" data-act="consulta" style="padding:10px">Enviar consulta</button>'+
+    (mias.length?mias.slice(0,20).map(q=>'<div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:6px"><div class="note num">'+fechaTxt(q.fecha)+' '+hhmm(q.t)+' · '+esc(nombre(q.by))+'</div><div>'+esc(q.txt)+'</div>'+(q.resp?'<div class="reply"><b>Respuesta:</b> '+esc(q.resp.txt)+'</div>':'<div><span class="chip info">Recibida por la coordinación</span></div>')+'</div>').join(''):'<p class="note" style="margin:0">Las consultas quedan registradas con su hora.</p>')+'</div></aside></div>';
+  return h;
+}
+
+/* ---------- eventos ---------- */
+document.addEventListener('input',e=>{const t=e.target;if(t.id&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!t.dataset.pi&&!t.dataset.val&&!t.dataset.pd&&t.type!=='checkbox')))ui.drafts[t.id]=t.value;});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&ui.sheet){ui.sheet=null;renderSheet();}});
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('button,[data-act="close"]'); if(!b) return;
+  const d=b.dataset;
+  if(d.act==='close'&&b.classList.contains('sheet-bg')&&e.target!==b) return;
+  if(d.view){ui.view=d.view;ui.sheet=null;render();window.scrollTo(0,0);return;}
+  if(d.pid){ui.pid=d.pid;render();return;}
+  if(d.planpid){ui.planPid=d.planpid;render();return;}
+  if(d.act==='close'){ui.sheet=null;renderSheet();return;}
+  /* acceso */
+  if(d.act==='sendreq'){
+    const r=document.getElementById('req-rol').value,msg=(document.getElementById('req-msg').value||'').trim();
+    const ok=await safe(()=>db.doc('solicitudes/'+me).set({rol:r,msg:msg.slice(0,400),ts:Date.now()}),'Pedido enviado');
+    if(!ok) ui.readOnly=true; render(); return;
+  }
+  if(d.act==='usecode'){
+    const v=(document.getElementById('acc-code').value||'').trim().toUpperCase();
+    if(!v){document.getElementById('acc-code').focus();return;}
+    if(!(S.equipo.miembros||{})['c-'+v]){toast('Ese código no existe o fue dado de baja.');return;}
+    storeCode(v);delete ui.drafts['acc-code'];ui.view=null;render();handleIntent();toast('Bienvenida, '+nombre('c-'+v));return;
+  }
+  if(d.act==='logout'){storeCode(null);who=null;ui.view=null;render();return;}
+  if(d.act==='export'){window.__cuidacasaExport();return;}
+  if(d.act==='mkcode'){
+    const nom=(document.getElementById('mk-nombre').value||'').trim(),r=document.getElementById('mk-rol').value;
+    if(!nom){toast('Escribí el nombre de la persona.');document.getElementById('mk-nombre').focus();return;}
+    const pac=[...document.querySelectorAll('input[data-mp="nuevo"]:checked')].map(x=>x.value);
+    if(!pac.length){toast('Elegí al menos un paciente.');return;}
+    const abc='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let code='';const rnd=crypto.getRandomValues(new Uint32Array(6));rnd.forEach(n=>{code+=abc[n%abc.length];});
+    const miembros=JSON.parse(JSON.stringify(S.equipo.miembros||{}));miembros['c-'+code]={rol:r,pacientes:pac,nombre:nom.slice(0,80)};
+    const ok=await safe(()=>writeEquipo({miembros}),'Acceso creado');
+    if(ok){ui.lastCode={code,nombre:nom};delete ui.drafts['mk-nombre'];render();}
+    return;
+  }
+  if(d.act==='cancelreq'){await safe(()=>db.doc('solicitudes/'+me).delete());return;}
+  /* cuidadora */
+  const pid=ui.pid;
+  if(d.act==='checkin'){
+    const el=document.getElementById('code-'+pid),v=(el&&el.value||'').trim(),p=S.pacientes[pid];
+    if(v!==String(p.codigo)){toast('El código no coincide con el de este domicilio.');el&&el.focus();return;}
+    delete ui.drafts['code-'+pid];
+    await safe(()=>writeDia(pid,{checkin:{t:now().min,by:who,qr:false}}),'Ingreso registrado a las '+hhmm(now().min));return;
+  }
+  if(d.task!==undefined&&!b.disabled){ui.sheet={kind:'task',pid,key:d.task,sel:null,piel:null};renderSheet();return;}
+  if(d.act==='nov'||d.act==='caida'){ui.sheet={kind:d.act,pid};delete ui.drafts.novtxt;renderSheet();document.getElementById('novtxt').focus();return;}
+  if(d.act==='out'){ui.sheet={kind:'confirm',pid,title:'¿Cerrar el turno?',text:'Se registra tu salida a las '+hhmm(now().min)+'. Después no vas a poder cargar más tareas de hoy.',ok:'Cerrar turno',run:()=>writeDia(pid,{checkout:{t:now().min,by:who}}),msg:'Salida registrada'};renderSheet();return;}
+  if(d.act==='confirm'&&ui.sheet){const sh=ui.sheet;ui.sheet=null;renderSheet();await safe(sh.run,sh.msg);return;}
+  if(d.opt!==undefined&&ui.sheet){const tk=tareas(ui.sheet.pid).find(t=>t.key===ui.sheet.key);if(tk&&tk.it.tipo==='higiene'){const s=ui.sheet.sel||[];ui.sheet.sel=s.includes(d.opt)?s.filter(x=>x!==d.opt):s.concat(d.opt);}else ui.sheet.sel=d.opt;renderSheet();return;}
+  if(d.piel!==undefined&&ui.sheet){ui.sheet.piel=d.piel;renderSheet();return;}
+  if(d.act==='save'&&ui.sheet&&!ui.sheet.busy){
+    const sh=ui.sheet,tk=tareas(sh.pid).find(t=>t.key===sh.key); if(!tk) return;
+    const tp=tk.it.tipo,s=sh.sel,t=now().min; let dd={};
+    if(tp==='hidratacion') dd={ml:s==='Rechazó'?0:+s}; if(tp==='alimentacion') dd={pct:+s}; if(tp==='postural') dd={pos:s}; if(tp==='medicacion') dd={est:s}; if(tp==='higiene') dd={acc:s,piel:sh.piel};
+    const patch={reg:{[rid()]:{key:tk.key,tipo:tp,t,d:dd,by:who}}};
+    const extra=(tp==='higiene'&&sh.piel!=='Sin lesiones')?'Control de piel: '+sh.piel.toLowerCase()+'.':(tp==='hidratacion'&&s==='Rechazó')?'Rechazó el líquido ofrecido.':(tp==='medicacion'&&s!=='Administrada')?'Medicación '+s.toLowerCase()+' ('+tk.it.obj+').':null;
+    if(extra) patch.nov={[rid()]:{t,txt:extra,caida:false,by:who}};
+    sh.busy=true;renderSheet();
+    const ok=await safe(()=>writeDia(sh.pid,patch),TIPOS[tp].n+' registrada a las '+hhmm(t));
+    if(ok){ui.sheet=null;} else sh.busy=false; renderSheet(); return;
+  }
+  if(d.act==='savenov'&&ui.sheet&&!ui.sheet.busy){
+    const sh=ui.sheet,txt=(document.getElementById('novtxt').value||'').trim(); if(!txt){document.getElementById('novtxt').focus();return;}
+    sh.busy=true;renderSheet();
+    const ok=await safe(()=>writeDia(sh.pid,{nov:{[rid()]:{t:now().min,txt:txt.slice(0,600),caida:sh.kind==='caida',by:who}}}),sh.kind==='caida'?'Caída enviada. La coordinación recibió la alerta.':'Novedad enviada');
+    if(ok){ui.sheet=null;delete ui.drafts.novtxt;} else sh.busy=false; renderSheet(); return;
+  }
+  /* supervisión */
+  if(d.ack){await safe(()=>writeDia(d.apid,{ack:{[d.ack]:{t:now().min,by:who}}}));return;}
+  if(d.resp){const el=document.getElementById('resp-'+d.resp),txt=(el.value||'').trim();if(!txt){el.focus();return;}
+    const ok=await safe(()=>qWrite('cq-'+d.resp,()=>db.doc('consultas/'+d.resp).update({resp:{t:now().min,txt:txt.slice(0,800),by:who}})),'Respuesta enviada');if(ok)delete ui.drafts['resp-'+d.resp];return;}
+  /* familia */
+  if(d.act==='consulta'){const el=document.getElementById('consulta'),txt=(el.value||'').trim();if(!txt){el.focus();return;}
+    const n=now();const ok=await safe(()=>db.collection('consultas').doc(rid()).set({pid:ui.pid,fecha:n.fecha,t:n.min,ts:Date.now(),txt:txt.slice(0,800),by:who,resp:null}),'Consulta enviada');if(ok){delete ui.drafts.consulta;render();}return;}
+  /* pacientes */
+  if(d.act==='newpac'){ui.newPac=true;render();document.getElementById('np-nombre').focus();return;}
+  if(d.act==='cancelnew'){ui.newPac=false;render();return;}
+  if(d.act==='createpac'){
+    const g=id=>(document.getElementById(id).value||'').trim(),nom=g('np-nombre'),t0=parseHH(g('np-t0')),t1=parseHH(g('np-t1'));
+    if(!nom){toast('Escribí el nombre del paciente.');return;}
+    if(t0==null||t1==null||t1<=t0){toast('Revisá el horario del turno (por ejemplo 08:00 a 20:00).');return;}
+    const id='p'+rid(),plan=DEF_PLAN.map(it=>Object.assign({},it,it.horas?{horas:it.horas.filter(h=>h>=t0&&h<t1)}:{desde:t0+30}));
+    const body={nombre:nom,edad:+g('np-edad')||null,dir:g('np-dir'),barrio:g('np-barrio'),turno:[t0,t1],val:{},plan,codigo:String(Math.floor(1000+Math.random()*9000)),activo:true,creado:Date.now()};
+    const ok=await safe(()=>db.doc('pacientes/'+id).set(body),'Paciente creado');
+    if(ok){ui.newPac=false;['np-nombre','np-edad','np-dir','np-barrio','np-t0','np-t1'].forEach(k=>delete ui.drafts[k]);ui.planPid=id;render();}
+    return;
+  }
+  if(d.act==='newcode'){const p=ui.planPid;await safe(()=>writePac(p,{codigo:String(Math.floor(1000+Math.random()*9000))}),'Código nuevo. Imprimí el QR otra vez.');return;}
+  if(d.act==='dlqr'&&dl){const p=S.pacientes[ui.planPid],svg=qrSvg(ui.planPid);if(!svg)return;
+    const card='<svg xmlns="http://www.w3.org/2000/svg" width="420" height="560" viewBox="0 0 420 560"><rect width="420" height="560" fill="#fff"/><text x="210" y="56" font-family="Arial" font-size="26" font-weight="700" text-anchor="middle" fill="#0E6B66">CuidaCasa</text><text x="210" y="90" font-family="Arial" font-size="18" text-anchor="middle" fill="#16252B">Ingreso de la cuidadora</text><g transform="translate(60,110)">'+svg.replace('<svg ','<svg width="300" height="300" ')+'</g><text x="210" y="460" font-family="Arial" font-size="16" text-anchor="middle" fill="#4B5E63">Escaneá al llegar y al irte. Código:</text><text x="210" y="510" font-family="Arial" font-size="44" font-weight="700" letter-spacing="10" text-anchor="middle" fill="#16252B">'+esc(p.codigo)+'</text></svg>';
+    try{await dl.save({filename:'QR ingreso '+p.nombre+'.svg',data:card});}catch(err){if(err&&err.code!=='declined')toast('No se pudo descargar el QR.');}return;}
+  if(d.act==='baja'){const p=ui.planPid;ui.sheet={kind:'confirm',title:'¿Dar de baja a '+S.pacientes[p].nombre+'?',text:'Deja de aparecer en el tablero y en las apps. Sus registros quedan guardados.',ok:'Dar de baja',run:()=>writePac(p,{activo:false}),msg:'Paciente dado de baja'};renderSheet();return;}
+  if(d.del!==undefined){const p=S.pacientes[ui.planPid],plan=(p.plan||[]).slice();plan.splice(+d.del,1);await safe(()=>writePac(ui.planPid,{plan}));return;}
+  if(d.esc){const p=S.pacientes[ui.planPid],prev=((p.val||{})[d.esc+'Items'])||{};ui.sheet={kind:'escala',key:d.esc,ans:JSON.parse(JSON.stringify(prev))};renderSheet();return;}
+  if(d.ei!==undefined&&ui.sheet&&ui.sheet.kind==='escala'){
+    const it=ESCALAS[ui.sheet.key].items.find(x=>x.id===d.ei),a=ui.sheet.ans;
+    if(it.multi){if(d.ev==='none')a[it.id]=[];else{const i=+d.ev,cur=a[it.id]||[];a[it.id]=cur.includes(i)?cur.filter(x=>x!==i):cur.concat(i).sort();}}
+    else a[it.id]=+d.ev;
+    const sc=document.querySelector('.sheet')?document.querySelector('.sheet').scrollTop:0;renderSheet();const nsh=document.querySelector('.sheet');if(nsh)nsh.scrollTop=sc;return;
+  }
+  if(d.act==='saveesc'&&ui.sheet&&ui.sheet.kind==='escala'){
+    const sh=ui.sheet,s=escalaScore(sh.key,sh.ans); if(s==null) return;
+    const p=S.pacientes[ui.planPid],val=Object.assign({},p.val||{});
+    val[sh.key]=s;val[sh.key+'Items']=sh.ans;val[sh.key+'Fecha']=S.fecha;val.fecha=S.fecha;
+    if(sh.key==='downton') val.caidas=s>=3?'Alto':'Bajo';
+    if(sh.key==='mna') val.nutricion=s>=12?'Normal':s>=8?'En riesgo':'Desnutrición';
+    ui.sheet=null;renderSheet();
+    const patch={val};
+    if(val.barthel!=null&&val.braden!=null){patch.plan=planDesdeValoracion(Object.assign({},p,{val}));val.planGen=S.fecha;}
+    await safe(()=>writePac(ui.planPid,patch),ESCALAS[sh.key].t.split(' (')[0]+': '+s+' puntos'+(patch.plan?' · plan actualizado':''));return;
+  }
+  if(d.act==='regen'){const p=S.pacientes[ui.planPid],val=Object.assign({},p.val||{});if(val.barthel==null||val.braden==null){toast('Primero valorá Barthel y Braden.');return;}
+    ui.sheet={kind:'confirm',title:'¿Rehacer el plan desde la valoración?',text:'Se reemplazan los cambios de posición, la hidratación, la alimentación y la higiene. La medicación queda como está.',ok:'Rehacer plan',run:()=>{val.planGen=S.fecha;return writePac(ui.planPid,{plan:planDesdeValoracion(Object.assign({},p,{val})),val});},msg:'Plan actualizado según la valoración'};renderSheet();return;}
+  if(d.addrec){await addTask(d.addrec);return;}
+  if(d.act==='addtask'){await addTask(document.getElementById('addtipo').value);return;}
+  async function addTask(tp){const p=S.pacientes[ui.planPid];
+    const base={postural:{cada:2,obj:'Rotar posiciones'},hidratacion:{cada:2,obj:'Ofrecer 200 ml',meta:1200},alimentacion:{horas:[Math.max(p.turno[0],540)],obj:'Asistir la comida'},medicacion:{horas:[Math.max(p.turno[0],540)],obj:'Indicar fármaco y dosis'},higiene:{horas:[Math.max(p.turno[0],600)],obj:'Higiene y control de piel'}}[tp];
+    const plan=(p.plan||[]).concat([Object.assign({id:tp.slice(0,3)+rid().slice(-5),tipo:tp,desde:p.turno[0]+30},base)]);
+    await safe(()=>writePac(ui.planPid,{plan}));return;}
+  /* equipo */
+  const picked=uid=>[...document.querySelectorAll('input[data-mp="'+uid+'"]:checked')].map(x=>x.value);
+  if(d.approve){const s=S.solicitudes.find(x=>x.id===d.approve);if(!s)return;
+    const miembros=Object.assign({},S.equipo.miembros||{});miembros[s.id]={rol:s.rol,pacientes:s.rol==='coordinacion'?[]:picked(s.id)};
+    const ok=await safe(()=>writeEquipo({miembros}),'Acceso aprobado');if(ok)await safe(()=>db.doc('solicitudes/'+s.id).delete());return;}
+  if(d.reject){await safe(()=>db.doc('solicitudes/'+d.reject).delete(),'Pedido rechazado');return;}
+  if(d.savemp){const miembros=JSON.parse(JSON.stringify(S.equipo.miembros||{}));if(!miembros[d.savemp])return;miembros[d.savemp].pacientes=picked(d.savemp);await safe(()=>writeEquipo({miembros}),'Pacientes actualizados');return;}
+  if(d.removem){const uid=d.removem;ui.sheet={kind:'confirm',title:'¿Quitar a '+nombre(uid)+'?',text:'Deja de ver pacientes en la app. Para cortar del todo el acceso, quitala también desde el menú Compartir.',ok:'Quitar',run:()=>{const m=JSON.parse(JSON.stringify(S.equipo.miembros||{}));delete m[uid];return writeEquipo({miembros:m});},msg:'Persona quitada'};renderSheet();return;}
+});
+document.addEventListener('change',async e=>{
+  const t=e.target,d=t.dataset,pid=ui.planPid,p=S.pacientes[pid]; if(!p) return;
+  if(d.val){const val=Object.assign({},p.val||{});if(d.val==='barthel'||d.val==='braden'){if(t.value===''){delete val[d.val];}else{const n=Math.round(+t.value);val[d.val]=Math.max(+t.min,Math.min(+t.max,isFinite(n)?n:+t.min));}}else val[d.val]=t.value;await safe(()=>writePac(pid,{val}));return;}
+  if(d.pd){
+    if(d.pd==='t0'||d.pd==='t1'){const v=parseHH(t.value),tr=p.turno.slice();if(v==null){toast('Usá el formato 08:00.');render();return;}tr[d.pd==='t0'?0:1]=v;if(tr[1]<=tr[0]){toast('El turno tiene que terminar después de empezar.');render();return;}await safe(()=>writePac(pid,{turno:tr}));return;}
+    const v=d.pd==='edad'?(+t.value||null):t.value.trim(); if(d.pd==='nombre'&&!v){toast('El nombre no puede quedar vacío.');render();return;}
+    await safe(()=>writePac(pid,{[d.pd]:v}));return;
+  }
+  if(d.pi!==undefined){
+    const plan=JSON.parse(JSON.stringify(p.plan||[])),it=plan[+d.pi]; if(!it) return;
+    if(d.pf==='modo'){if(t.value==='horas'){it.horas=[it.desde!=null?it.desde:p.turno[0]+30];}else{delete it.horas;it.cada=it.cada||2;it.desde=it.desde!=null?it.desde:p.turno[0]+30;}}
+    if(d.pf==='cada') it.cada=Math.max(1,Math.min(8,+t.value||2));
+    if(d.pf==='desde'){const v=parseHH(t.value);if(v==null){toast('Usá el formato 08:30.');render();return;}it.desde=v;}
+    if(d.pf==='horas'){const hs=t.value.split(/[,;\s]+/).map(parseHH).filter(v=>v!=null);if(!hs.length){toast('Escribí horarios como 09:00, 13:00.');render();return;}it.horas=[...new Set(hs)].sort((a,b)=>a-b);}
+    if(d.pf==='obj') it.obj=t.value.slice(0,200);
+    if(d.pf==='meta') it.meta=Math.max(0,+t.value||0);
+    await safe(()=>writePac(pid,{plan}));
+  }
+});
+
+/* ---------- ingreso por QR (#ingreso-<paciente>-<código>) ---------- */
+function readHash(){const m=(location.hash||'').match(/^#ingreso-([a-z0-9]+)-(\d{4})$/);if(m)ui.hashIntent={pid:m[1],code:m[2]};}
+window.addEventListener('hashchange',()=>{readHash();handleIntent();});
+let intentBusy=false;
+async function handleIntent(){
+  const it=ui.hashIntent; if(!it||intentBusy||!S.loaded.p||!S.loaded.e||!S.loaded.d) return;
+  const p=S.pacientes[it.pid],r=rol();
+  if(!p||!r) return;
+  ui.hashIntent=null; try{history.replaceState(null,'',location.pathname+location.search);}catch(e){}
+  if(String(p.codigo)!==it.code){toast('Este QR ya no es válido. Pedile a la coordinación el código nuevo.');return;}
+  if(!misPacientes().includes(it.pid)){toast('Este domicilio no está asignado a tu usuario.');return;}
+  ui.pid=it.pid;ui.view=r==='coordinacion'?'cuidadora':ui.view;
+  const d=dia(it.pid);
+  intentBusy=true;
+  if(!d.checkin) await safe(()=>writeDia(it.pid,{checkin:{t:now().min,by:who,qr:true}}),'Ingreso verificado con el QR a las '+hhmm(now().min));
+  else if(!d.checkout){ui.sheet={kind:'confirm',pid:it.pid,title:'¿Registrar tu salida?',text:'Ya registraste el ingreso a las '+hhmm(d.checkin.t)+'. Si te vas, se cierra el turno a las '+hhmm(now().min)+'.',ok:'Registrar salida',run:()=>writeDia(it.pid,{checkout:{t:now().min,by:who}}),msg:'Salida registrada'};}
+  else toast('El turno de hoy ya está cerrado.');
+  intentBusy=false; render();
+}
+
+/* ---------- datos en vivo ---------- */
+const unsub={};
+function subDias(){
+  if(unsub.dias) unsub.dias();
+  S.fecha=now().fecha; S.dias={}; S.loaded.d=false;
+  unsub.dias=db.collection('dias').where('fecha','==',S.fecha).onSnapshot(q=>{const o={};q.docs.forEach(x=>{const v=x.data();if(v&&v.pid)o[v.pid]=v;});S.dias=o;S.loaded.d=true;render();handleIntent();},onErr);
+}
+function onErr(e){if(e&&e.code==='revoked'){ui.fatal='revoked';render();}}
+async function boot(){
+  readHash();
+  if(!window.claude||typeof claude.use!=='function'){ui.fatal='nodb';render();return;}
+  [db,user,dl]=await Promise.all([claude.use('db'),claude.use('user'),claude.use('downloads')]);
+  if(!db){ui.fatal='nodb';render();return;}
+  if(user){[me,isOwner,canEdit]=await Promise.all([user.id(),user.isOwner(),user.canEdit()]);}
+  unsub.e=db.doc('config/equipo').onSnapshot(s=>{S.equipo=(s.exists&&s.data())||{miembros:{}};if(!S.equipo.miembros)S.equipo.miembros={};S.loaded.e=true;render();handleIntent();},onErr);
+  unsub.p=db.collection('pacientes').onSnapshot(q=>{const o={};q.docs.forEach(x=>{o[x.id]=x.data();});S.pacientes=o;S.loaded.p=true;render();handleIntent();},onErr);
+  unsub.c=db.collection('consultas').orderBy('ts','desc').limit(200).onSnapshot(q=>{S.consultas=q.docs.map(x=>Object.assign({id:x.id},x.data()));render();},onErr);
+  unsub.s=db.collection('solicitudes').onSnapshot(q=>{S.solicitudes=q.docs.map(x=>Object.assign({id:x.id},x.data()));render();},onErr);
+  subDias();
+  setInterval(()=>{if(now().fecha!==S.fecha)subDias();else if(!ui.sheet&&!document.activeElement.matches('input,textarea,select'))render();},30000);
+}
+document.addEventListener('change',e=>{if(e.target.id!=='imp-file'||!e.target.files[0])return;const f=e.target.files[0];const r=new FileReader();r.onload=()=>{try{window.__cuidacasaImport(r.result);toast('Copia restaurada');}catch(err){toast('Ese archivo no es una copia válida de CuidaCasa.');}e.target.value='';};r.readAsText(f);});
+boot();
+})();
+</script>
+
+</body>
+</html>
