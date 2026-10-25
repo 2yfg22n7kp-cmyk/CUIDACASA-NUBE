@@ -216,7 +216,9 @@ td input,td select{border:1px solid var(--line);border-radius:7px;padding:6px 8p
 .mem .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .checks{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:6px}
 .checks label{display:flex;gap:6px;align-items:center;font-size:14px}
+.on-netlify .dock{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))}.on-netlify .dock-space{height:140px}.on-netlify .toast{bottom:calc(150px + env(safe-area-inset-bottom,0px))}
 </style>
+<script>try{if(/netlify\.app$/.test(location.hostname))document.documentElement.classList.add("on-netlify")}catch(e){}</script>
 
 <header class="top"><div class="top-in" id="top"><div class="brand"><b>CuidaCasa</b><span>Cuidado trazable</span></div></div></header>
 <main id="app"><div class="panel center"><h2>Cargando CuidaCasa…</h2><p class="note">Conectando con los datos del equipo.</p></div></main>
