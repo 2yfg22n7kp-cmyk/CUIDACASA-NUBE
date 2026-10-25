@@ -1,0 +1,17 @@
+CuidaCasa - contenido del repositorio
+
+public/            lo que ve la gente: la app (index.html), el aviso en segundo plano,
+                   el ícono y el manifiesto para instalarla en el celular.
+netlify/functions  piezas que corren en Netlify:
+                   - avisar: avisa al instante cuando se carga una caída o novedad
+                   - alertas-programadas: revisa las alertas cada 2 minutos
+                   - config: entrega la clave pública de avisos
+netlify/lib        lógica compartida (las mismas alertas que muestra el tablero)
+netlify.toml       le indica a Netlify dónde está cada cosa
+package.json       lista la librería que usan las funciones (firebase-admin)
+reglas-firestore.txt  reglas para pegar en Firestore > Reglas
+
+Variables que hay que cargar en Netlify (Project configuration > Environment variables):
+  VAPID_PUBLIC_KEY       clave de Firebase > Cloud Messaging > Certificados push web
+  FIREBASE_CLIENT_EMAIL  "client_email" del archivo de la cuenta de servicio
+  FIREBASE_PRIVATE_KEY   "private_key" del mismo archivo (es secreta: nunca subirla a GitHub)

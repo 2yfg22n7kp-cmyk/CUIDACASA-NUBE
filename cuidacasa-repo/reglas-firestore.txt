@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function equipoPath() { return /databases/$(database)/documents/config/equipo; }
+    function hayEquipo() { return exists(equipoPath()); }
+    function equipo() { return get(equipoPath()).data; }
+    function isAdmin() { return signedIn() && hayEquipo() && request.auth.uid in equipo().admins; }
+    function esMiembro() { return signedIn() && hayEquipo() && request.auth.uid in equipo().miembros; }
+    function asignado(pid) { return esMiembro() && pid in equipo().miembros[request.auth.uid].pacientes; }
+    function esCuidadora() { return esMiembro() && equipo().miembros[request.auth.uid].rol == 'cuidadora'; }
+
+    // Equipo: quién es coordinación y qué pacientes tiene cada persona.
+    match /config/equipo {
+      allow read: if isAdmin() || esMiembro() || (signedIn() && !hayEquipo());
+      allow create: if signedIn() && !hayEquipo() && request.resource.data.admins == [request.auth.uid];
+      allow update, delete: if isAdmin();
+    }
+
+    // Pacientes y planes: solo coordinación modifica; cada persona lee solo los suyos.
+    match /pacientes/{pid} {
+      allow read: if isAdmin() || asignado(pid);
+      allow write: if isAdmin();
+    }
+
+    // Registro diario: la cuidadora asignada escribe; familia asignada lee.
+    match /dias/{did} {
+      allow read: if isAdmin()
+        || (resource == null && esMiembro())
+        || (resource != null && asignado(resource.data.pid));
+      allow create: if isAdmin() || (asignado(request.resource.data.pid) && esCuidadora());
+      allow update: if isAdmin()
+        || (asignado(resource.data.pid) && esCuidadora() && request.resource.data.pid == resource.data.pid);
+      allow delete: if isAdmin();
+    }
+
+    // Consultas: la familia escribe las de su paciente; coordinación responde.
+    match /consultas/{cid} {
+      allow read: if isAdmin() || asignado(resource.data.pid);
+      allow create: if isAdmin()
+        || (asignado(request.resource.data.pid) && request.resource.data.by == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // Celulares que reciben avisos: cada persona registra solo los suyos.
+    // (La colección "avisos" la usa solo el servidor; nadie la lee desde la app.)
+    match /tokens/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Pedidos de acceso: cada persona maneja el suyo; coordinación los ve todos.
+    match /solicitudes/{uid} {
+      allow read, delete: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow create, update: if signedIn() && request.auth.uid == uid;
+    }
+  }
+}
