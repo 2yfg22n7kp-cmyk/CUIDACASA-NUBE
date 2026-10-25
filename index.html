@@ -114,6 +114,7 @@ main{max-width:1240px;margin:0 auto;padding-block:22px 64px;padding-left:max(16p
 .recorda h3{font-size:15px;margin-bottom:4px}
 .recorda ul{margin:0;padding-left:18px;color:var(--ink-2);font-size:13.5px;display:grid;gap:2px}
 .dock .btn{flex:1;padding:11px 6px;border-radius:12px;font-size:13.5px}
+.dock .btn.sos{flex:0 0 auto;min-width:58px;padding:11px 12px;background:var(--crit);color:#fff;border-color:transparent;font-weight:800;text-decoration:none;display:flex;align-items:center;justify-content:center}.dock-in>.btn.sos:only-child{flex:1;font-size:15px}
 .dock .btn.crit{background:var(--crit-soft);color:var(--crit);border-color:transparent}
 .sheet-bg{position:fixed;inset:0;background:var(--shade);display:flex;align-items:flex-end;justify-content:center;z-index:50}
 .sheet{background:var(--surface);width:100%;max-width:480px;border-radius:22px 22px 0 0;padding:18px 16px calc(20px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:12px;max-height:88vh;overflow:auto}
@@ -497,9 +498,10 @@ function vCuid(){
       (ts.length?'':'<div class="empty">El plan de cuidados todavía no tiene tareas. Avisale a la coordinación.</div>')+
       sec('Para hacer ahora',g.ahora)+sec('Atrasadas',g.omitida)+sec('Próximas',g.proxima)+sec('Hechas',g.hecha);
   }
-  const dock=(ci&&!co)?'<div class="dock-space"></div><div class="dock"><div class="dock-in"><button class="btn" data-act="nov">Novedad</button><button class="btn crit" data-act="caida">Reportar caída</button><button class="btn" data-act="out">Cerrar turno</button></div></div>':'';
+  const sos='<a class="btn sos" href="tel:911" aria-label="Llamar al 911">Llamar 911</a>';
+  const dock='<div class="dock-space"></div><div class="dock"><div class="dock-in">'+((ci&&!co)?sos.replace('Llamar 911','911')+'<button class="btn" data-act="nov">Novedad</button><button class="btn crit" data-act="caida">Reportar caída</button><button class="btn" data-act="out">Cerrar turno</button>':sos)+'</div></div>';
   const phone='<div class="phone"><div class="screen"><div class="app-head"><div class="s">'+hhmm(c)+' · '+esc(p.barrio||'')+'</div><h2>'+esc(p.nombre)+(p.edad?', '+p.edad:'')+'</h2><div class="s">'+esc(p.dir||'')+'</div></div><div class="app-body">'+body+'</div></div></div>';
-  const recorda='<div class="panel recorda"><h3>Recordá</h3><ul><li>Registrá cada tarea en el momento: la hora se guarda sola.</li><li>Si notás algo raro (piel enrojecida, no quiere comer, fiebre), cargalo como novedad.</li><li>Ante una caída, primero asistí a la persona y después reportala.</li></ul></div>';
+  const recorda='<div class="panel recorda"><h3>Recordá</h3><ul><li>Registrá cada tarea en el momento: la hora se guarda sola.</li><li>Si notás algo raro (piel enrojecida, no quiere comer, fiebre), cargalo como novedad.</li><li>Ante una caída, primero asistí a la persona y después reportala.</li><li>Si hay una emergencia (no responde, no respira bien, sangra mucho, golpe en la cabeza), llamá al 911 con el botón rojo y después avisá a la coordinación.</li></ul></div>';
   return head+'<div class="cuid-col">'+recorda+phone+'</div>'+dock;
 }
 function renderSheet(){
