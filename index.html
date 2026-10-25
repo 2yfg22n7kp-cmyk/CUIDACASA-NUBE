@@ -3,63 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
 </head>
 <body>
-<script>
-/* CuidaCasa independiente: base de datos local en este navegador (sin servidor). */
-(function(){
-'use strict';
-const KEY='cuidacasa-datos-v1';
-let store={},ok=true;
-try{store=JSON.parse(localStorage.getItem(KEY)||'{}')||{};}catch(e){ok=false;store={};}
-const subs=new Set();
-function persist(){try{localStorage.setItem(KEY,JSON.stringify(store));}catch(e){}}
-function notify(){setTimeout(()=>subs.forEach(f=>{try{f();}catch(e){}}),0);}
-window.addEventListener('storage',e=>{if(e.key===KEY){try{store=JSON.parse(e.newValue||'{}')||{};}catch(err){}notify();}});
-const clone=v=>v===undefined?undefined:JSON.parse(JSON.stringify(v));
-function merge(a,b){for(const k in b){const v=b[k];if(v&&typeof v==='object'&&!Array.isArray(v)&&a[k]&&typeof a[k]==='object'&&!Array.isArray(a[k]))merge(a[k],v);else a[k]=clone(v);}return a;}
-const segs=p=>p.split('/').length;
-function snap(path){const v=store[path];return {id:path.split('/').pop(),exists:v!==undefined,data:()=>clone(v),metadata:{fromCache:false,hasPendingWrites:false}};}
-function docRef(path){
-  if(segs(path)%2) throw new TypeError('document path needs an even number of segments');
-  return {id:path.split('/').pop(),path,
-    get:async()=>snap(path),
-    set:async d=>{store[path]=clone(d);persist();notify();},
-    update:async d=>{if(store[path]===undefined)throw {code:'invalid_argument',message:'missing'};merge(store[path],d);persist();notify();},
-    delete:async()=>{delete store[path];persist();notify();},
-    acquire:async()=>({acquired:true}),
-    onSnapshot:(next)=>{let last=NaN;const f=()=>{const s=JSON.stringify(store[path])||"__none__";if(s===last)return;last=s;next(snap(path));};subs.add(f);setTimeout(f,0);return ()=>subs.delete(f);},
-    collection:c=>colRef(path+'/'+c)};
-}
-function query(col,filters,ord,lim){
-  const n=segs(col)+1;
-  const run=()=>{let docs=Object.keys(store).filter(p=>p.startsWith(col+'/')&&segs(p)===n).map(snap);
-    filters.forEach(([f,op,v])=>{docs=docs.filter(d=>{const x=d.data()[f];switch(op){case '==':return x===v;case '!=':return x!==v;case '<':return x<v;case '<=':return x<=v;case '>':return x>v;case '>=':return x>=v;case 'in':return v.includes(x);case 'not-in':return !v.includes(x);case 'array-contains':return Array.isArray(x)&&x.includes(v);}return true;});});
-    if(ord){const [f,dir]=ord;docs.sort((a,b)=>{const x=a.data()[f],y=b.data()[f];if(x===y)return 0;if(x===undefined)return 1;if(y===undefined)return -1;return (x>y?1:-1)*(dir==='desc'?-1:1);});}
-    else docs.sort((a,b)=>a.id<b.id?-1:1);
-    if(lim)docs=docs.slice(0,lim);
-    return {docs,size:docs.length,empty:!docs.length,docChanges:()=>[],metadata:{fromCache:false,hasPendingWrites:false}};};
-  return {where:(f,op,v)=>query(col,filters.concat([[f,op,v]]),ord,lim),orderBy:(f,d)=>query(col,filters,[f,d||'asc'],lim),limit:k=>query(col,filters,ord,k),
-    get:async()=>run(),
-    onSnapshot:(next)=>{let last=NaN;const f=()=>{const r=run();const s=JSON.stringify(r.docs.map(d=>[d.id,d.data()]));if(s===last)return;last=s;next(r);};subs.add(f);setTimeout(f,0);return ()=>subs.delete(f);}};
-}
-function colRef(col){const q=query(col,[],null,null);q.path=col;q.doc=id=>docRef(col+'/'+(id||(Date.now().toString(36)+Math.random().toString(36).slice(2,8))));q.add=async d=>{const r=q.doc();await r.set(d);return r;};return q;}
-const DB={doc:docRef,collection:colRef};
-const USER={id:async()=>'local',isOwner:async()=>true,canEdit:async()=>true,can:async()=>true,me:async()=>({id:'local',name:'',avatarUrl:'data:image/gif;base64,R0lGODlhAQABAAAAACw=',color:'#0E6B66',email:null,isOwner:true,canEdit:true}),
-  profiles:async ids=>{const o={};[].concat(ids).forEach(i=>{o[i]={id:i,name:'',avatarUrl:'data:image/gif;base64,R0lGODlhAQABAAAAACw=',color:'#888',email:null,isMe:i==='local',guest:false};});return o;},
-  name:async()=>'Coordinación',search:async()=>[]};
-function saveFile(filename,data,type){const blob=data instanceof Blob?data:new Blob([data],{type:type||'application/octet-stream'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}
-const DL={save:async({filename,data})=>{saveFile(filename,data,filename.endsWith('.svg')?'image/svg+xml':undefined);}};
-window.__cuidacasaExport=()=>{const d=new Date().toISOString().slice(0,10);saveFile('CuidaCasa copia '+d+'.json',JSON.stringify({app:'CuidaCasa',version:1,fecha:new Date().toISOString(),datos:store},null,1),'application/json');};
-window.__cuidacasaImport=txt=>{const o=JSON.parse(txt);if(!o||o.app!=='CuidaCasa'||typeof o.datos!=='object')throw new Error('bad');store=o.datos;persist();notify();};
-window.claude={use:async n=>n==='db'?(ok?DB:DB):n==='user'?USER:n==='downloads'?DL:null};
-})();
-</script>
 <title>CuidaCasa App</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&display=swap">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <style>
 /* Layout: barra superior con rol y pestañas; cada rol ve solo sus vistas. En celular la app de la cuidadora ocupa la pantalla. */
@@ -274,6 +228,7 @@ td input,td select{border:1px solid var(--line);border-radius:7px;padding:6px 8p
 'use strict';
 /* Enlace de esta app: el QR del domicilio abre esta dirección con el código de ingreso. */
 const APP_URL=/^https?:$/.test(location.protocol)?location.href.split('#')[0]:'';
+const FIREBASE_CONFIG={apiKey:"AIzaSyCg1w4c4Dz0dl8tFGv32W64ZWZZItVpkts",authDomain:"gestion-cuidados-83327.firebaseapp.com",projectId:"gestion-cuidados-83327",storageBucket:"gestion-cuidados-83327.firebasestorage.app",messagingSenderId:"571602133974",appId:"1:571602133974:web:27251b4751cb686a827a77"};
 const TZ='America/Argentina/Buenos_Aires';
 const TIPOS={postural:{n:'Cambio de posición',ico:'pos'},hidratacion:{n:'Hidratación',ico:'hid'},alimentacion:{n:'Alimentación',ico:'ali'},medicacion:{n:'Medicación',ico:'med'},higiene:{n:'Higiene',ico:'hig'}};
 const ICONS={
@@ -298,12 +253,7 @@ const CODE_KEY='cuidacasa-codigo';
 let memCode;
 function loadCode(){if(memCode!==undefined)return memCode;try{return localStorage.getItem(CODE_KEY)||null;}catch(e){return null;}}
 function storeCode(c){memCode=c||null;try{if(c)localStorage.setItem(CODE_KEY,c);else localStorage.removeItem(CODE_KEY);}catch(e){}}
-function resolveWho(){
-  const c=loadCode(),m=S.equipo.miembros||{};
-  if(c&&m['c-'+c]) who='c-'+c;
-  else if(me) who=me;
-  else who=null;
-}
+function resolveWho(){who=me;}
 const S={equipo:{miembros:{}},pacientes:{},dias:{},consultas:[],solicitudes:[],names:{},loaded:{e:false,p:false,d:false},fecha:null};
 const ui={view:null,pid:null,sheet:null,drafts:{},fatal:null,hashIntent:null,readOnly:false};
 
@@ -323,6 +273,8 @@ let toastT=null;
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true;},2800);}
 function errMsg(e){
   const c=e&&e.code;
+  if(c==='permission-denied') return 'No tenés permiso para guardar esto. Pedile a la coordinación que revise tu acceso.';
+  if(c==='unavailable') return 'Sin conexión. Revisá internet y probá de nuevo.';
   if(c==='invalid_argument') return 'Tu acceso a esta página es solo para ver, así que no se puede guardar. La coordinación tiene que invitarte por email con permiso de edición.';
   if(c==='quota_exceeded') return 'Se llenó el espacio de datos de la app. Avisale a la coordinación.';
   if(c==='resource_exhausted') return 'Demasiados cambios seguidos. Esperá unos segundos y probá de nuevo.';
@@ -334,13 +286,9 @@ async function safe(fn,okMsg){try{await fn();if(okMsg)toast(okMsg);return true;}
 
 /* ---------- roles ---------- */
 function rol(){
-  resolveWho();
-  if(who&&String(who).startsWith('c-')){const mc=S.equipo.miembros[who];if(mc&&mc.rol)return mc.rol;}
-  if(isOwner){if(!who)who=me||'owner';return 'coordinacion';}
-  const m=S.equipo.miembros&&who&&S.equipo.miembros[who];
-  if(m&&m.rol) return m.rol;
-  if(canEdit) return 'coordinacion';
-  return null;
+  who=me; if(!me) return null;
+  if((S.equipo.admins||[]).includes(me)) return 'coordinacion';
+  const m=(S.equipo.miembros||{})[me]; return m&&m.rol&&m.rol!=='coordinacion'?m.rol:null;
 }
 const activos=()=>Object.keys(S.pacientes).filter(pid=>S.pacientes[pid].activo!==false).sort((a,b)=>String(S.pacientes[a].nombre).localeCompare(S.pacientes[b].nombre));
 function misPacientes(){
@@ -348,7 +296,7 @@ function misPacientes(){
   const m=S.equipo.miembros[who]; return ((m&&m.pacientes)||[]).filter(pid=>S.pacientes[pid]&&S.pacientes[pid].activo!==false);
 }
 function personasDe(pid,r){return Object.keys(S.equipo.miembros||{}).filter(u=>{const m=S.equipo.miembros[u];return m.rol===r&&(m.pacientes||[]).includes(pid);});}
-function nombre(uid){const m=(S.equipo.miembros||{})[uid];if(m&&m.nombre)return m.nombre;if(uid==='owner'||uid==='local')return 'Coordinación';const p=S.names[uid];return (p&&p.name)||'Alguien del equipo';}
+function nombre(uid){const m=(S.equipo.miembros||{})[uid];if(m&&m.nombre)return m.nombre;if(uid==='owner'||(S.equipo.admins||[]).includes(uid)){const ai=(S.equipo.adminInfo||{})[uid];return (ai&&ai.nombre)||'Coordinación';}const p=S.names[uid];return (p&&p.name)||'Alguien del equipo';}
 let namesBusy=false;
 async function ensureNames(ids){
   if(!user||namesBusy) return; ids=[...new Set(ids.filter(Boolean))].filter(id=>!(id in S.names)); if(!ids.length) return;
@@ -428,7 +376,7 @@ function writeDia(pid,patch){
   });
 }
 const writePac=(pid,patch)=>qWrite('pac-'+pid,()=>db.doc('pacientes/'+pid).update(patch));
-const writeEquipo=body=>qWrite('equipo',()=>db.doc('config/equipo').set(body));
+const writeEquipo=body=>qWrite('equipo',()=>db.doc('config/equipo').set(Object.assign({admins:S.equipo.admins||[],adminInfo:S.equipo.adminInfo||{}},body)));
 
 /* ---------- render ---------- */
 const app=document.getElementById('app');
@@ -441,11 +389,11 @@ function tabsFor(r){
 function renderTop(r){
   const tabs=tabsFor(r);
   if(!ui.view||!tabs.some(t=>t[0]===ui.view)) ui.view=tabs.length?tabs[0][0]:null;
-  const meP=who&&!String(who).startsWith('c-')&&who!=='local'?S.names[who]:null,byCode=who&&String(who).startsWith('c-');
-  const nm=byCode?nombre(who):((meP&&meP.name)||'Vos');
+  const meP=who&&!String(who).startsWith('c-')?S.names[who]:null,byCode=who&&String(who).startsWith('c-');
+  const nm=nombre(who);
   document.getElementById('top').innerHTML='<div class="brand"><b>CuidaCasa</b><span>Cuidado trazable</span></div>'+
     (tabs.length>1?'<nav class="tabs" aria-label="Secciones">'+tabs.map(([k,l])=>'<button data-view="'+k+'" aria-pressed="'+(ui.view===k)+'">'+l+'</button>').join('')+'</nav>':'')+
-    (r?'<div class="who">'+(meP?'<img alt="" src="'+esc(meP.avatarUrl)+'">':'')+'<span><b>'+esc(nm)+'</b> · '+ROLES[r]+'</span>'+(byCode?'<button class="btn ghost" data-act="logout">Salir</button>':'')+'</div>':'');
+    (r?'<div class="who">'+(meP?'<img alt="" src="'+esc(meP.avatarUrl)+'">':'')+'<span><b>'+esc(nm)+'</b> · '+ROLES[r]+'</span>'+'<button class="btn ghost" data-act="signout">Salir</button>'+'</div>':'');
 }
 function captureFocus(){const a=document.activeElement;if(!a||!a.id)return null;return {id:a.id,s:a.selectionStart,e:a.selectionEnd};}
 function restoreFocus(f){if(!f)return;const el=document.getElementById(f.id);if(!el)return;el.focus();try{if(f.s!=null)el.setSelectionRange(f.s,f.e);}catch(e){}}
@@ -453,6 +401,9 @@ const draft=(id,def)=>id in ui.drafts?ui.drafts[id]:(def||'');
 function render(){
   const f=captureFocus();
   if(ui.fatal){renderTop(null);app.innerHTML=fatal();return;}
+  if(ui.auth==='wait') return;
+  if(ui.auth==='login'){renderTop(null);app.innerHTML=vLogin();renderSheet();restoreFocus(f);return;}
+  if(ui.noAccess){renderTop(null);app.innerHTML=vSolicitud();restoreFocus(f);return;}
   if(!S.loaded.e||!S.loaded.p){return;}
   const r=rol(); renderTop(r);
   let h;
@@ -465,7 +416,15 @@ function render(){
   ensureNames(ids);
 }
 function fatal(){
-  if(ui.fatal==='nodb') return '<div class="panel center"><h2>No se pudo abrir la app</h2><p>Este navegador no permite guardar datos. Abrí el archivo en Chrome, Safari o Edge, fuera del modo privado.</p></div>';
+  if(ui.fatal==='timeout'||String(ui.fatal).startsWith('fb:')){
+    const c=ui.fatal==='timeout'?'sin respuesta':ui.fatal.slice(3);
+    const tip=c==='permission-denied'?'Las reglas de seguridad no permiten el acceso. Revisá que hayas pegado y publicado las reglas en Firestore → Reglas.'
+      :(c==='not-found'||c==='failed-precondition')?'La base de datos de Firestore no está creada. En Firebase entrá a Firestore Database y tocá “Crear base de datos”.'
+      :c==='sin respuesta'?'La app no logra conectarse con Firestore. Revisá que la base de datos esté creada y que no haya un bloqueador de anuncios o una red que bloquee Google.'
+      :'Revisá en Firebase que la base de Firestore esté creada y que las reglas estén publicadas.';
+    return '<div class="panel center"><p class="eyebrow">No se pudo conectar</p><h2>La app no puede leer la base de datos</h2><p>'+esc(tip)+'</p><p class="note">Código: '+esc(c)+'</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-act="reload">Reintentar</button><button class="btn ghost" data-act="signout">Salir</button></div></div>';
+  }
+  if(ui.fatal==='nodb') return '<div class="panel center"><h2>No se pudo abrir la app</h2><p>No se pudo cargar la app. Revisá la conexión a internet y recargá la página.</p></div>';
   return '<div class="panel center"><h2>Se perdió el acceso</h2><p>Tu acceso a esta página cambió. Volvé a abrir el enlace o pedile acceso a la coordinación.</p></div>';
 }
 function selector(list,cur,attr){
@@ -475,7 +434,27 @@ function selector(list,cur,attr){
 function curPid(){const l=misPacientes();if(!l.length)return null;if(!ui.pid||!l.includes(ui.pid))ui.pid=l[0];return ui.pid;}
 
 /* Solicitud de acceso */
-function codeBox(){
+function codeBox(){return '';}
+function authMsg(c){
+  if(c==='auth/invalid-credential'||c==='auth/wrong-password'||c==='auth/user-not-found'||c==='auth/invalid-login-credentials') return 'Email o contraseña incorrectos.';
+  if(c==='auth/email-already-in-use') return 'Ese email ya tiene usuario. Si es tuyo, ingresá con tu contraseña.';
+  if(c==='auth/weak-password') return 'La contraseña tiene que tener al menos 6 caracteres.';
+  if(c==='auth/invalid-email') return 'Revisá el email.';
+  if(c==='auth/too-many-requests') return 'Demasiados intentos. Esperá unos minutos.';
+  if(c==='auth/network-request-failed') return 'Sin conexión. Revisá internet.';
+  if(c==='auth/operation-not-allowed') return 'Falta activar el acceso con correo y contraseña en Firebase.';
+  return 'No se pudo completar. Probá de nuevo.';
+}
+function vLogin(){
+  return '<div class="panel center"><p class="eyebrow">CuidaCasa</p><h2>Ingresá con tu usuario</h2>'+
+    '<div class="field"><label for="li-email">Email</label><input id="li-email" type="email" autocomplete="username" value="'+esc(draft('li-email'))+'"></div>'+
+    '<div class="field"><label for="li-pass">Contraseña</label><input id="li-pass" type="password" autocomplete="current-password" value="'+esc(draft('li-pass'))+'"></div>'+
+    (ui.loginErr?'<p style="margin:0;color:var(--crit);font-weight:700">'+esc(ui.loginErr)+'</p>':'')+
+    '<button class="btn primary" data-act="login" style="padding:12px"'+(ui.loginBusy?' disabled':'')+'>Ingresar</button>'+
+    '<button class="btn ghost" data-act="forgot">Olvidé mi contraseña</button>'+
+    '<details style="border-top:1px solid var(--line);padding-top:12px"><summary class="note" style="cursor:pointer">Primera vez: crear la cuenta de coordinación</summary><p class="note">Escribí arriba tu email y una contraseña de al menos 6 caracteres. La primera cuenta creada queda como coordinación.</p><button class="btn" data-act="signup">Crear mi cuenta</button></details></div>';
+}
+function codeBoxOld(){
   const bad=loadCode();
   return '<div class="field"><label for="acc-code">Código de acceso personal</label><div class="code-in"><input id="acc-code" inputmode="text" autocomplete="off" maxlength="8" style="font-size:20px" value="'+esc(draft('acc-code'))+'" aria-label="Código de acceso"><button class="btn primary" data-act="usecode" style="padding:0 18px;border-radius:12px">Entrar</button></div>'+
     (bad?'<p class="note" style="color:var(--crit)">El código guardado ('+esc(bad)+') ya no está activo. Pedile uno nuevo a la coordinación.</p>':'<p class="note">Te lo da la coordinación de CuidaCasa. Lo escribís una sola vez en este dispositivo.</p>')+'</div>';
@@ -483,11 +462,11 @@ function codeBox(){
 function vSolicitud(){
   const mine=me&&S.solicitudes.find(s=>s.id===me);
   if(!me) return '<div class="panel center"><p class="eyebrow">Bienvenida</p><h2>Ingresá a CuidaCasa</h2><p>Escribí el código de acceso que te pasó la coordinación.</p>'+codeBox()+'</div>';
-  if(mine) return '<div class="panel center"><p class="eyebrow">Solicitud enviada</p><h2>Esperando la aprobación de la coordinación</h2><p>Pediste acceso como <b>'+ROLES[mine.rol]+'</b>. Cuando la coordinación te asigne un paciente, esta pantalla cambia sola.</p><p class="note">'+esc(mine.msg||'')+'</p><button class="btn ghost" data-act="cancelreq">Cancelar solicitud</button></div>';
+  if(mine) return '<div class="panel center"><p class="eyebrow">Solicitud enviada</p><h2>Esperando la aprobación de la coordinación</h2><p>Pediste acceso como <b>'+ROLES[mine.rol]+'</b>. Cuando la coordinación te asigne un paciente, esta pantalla cambia sola.</p><p class="note">'+esc(mine.msg||'')+'</p><button class="btn ghost" data-act="cancelreq">Cancelar solicitud</button><button class="btn ghost" data-act="signout">Salir</button></div>';
   return '<div class="panel center"><p class="eyebrow">Bienvenida</p><h2>Pedí acceso a CuidaCasa</h2><p>La coordinación revisa tu pedido y te asigna el paciente que acompañás.</p>'+
     '<div class="field"><label for="req-rol">Soy</label><select id="req-rol"><option value="cuidadora">Cuidadora</option><option value="familia">Familiar de un paciente</option><option value="coordinacion">Parte de la coordinación</option></select></div>'+
     '<div class="field"><label for="req-msg">¿A quién acompañás?</label><textarea id="req-msg" placeholder="Ej.: Soy Marta, cuido a Elena Ruiz de lunes a viernes">'+esc(draft('req-msg'))+'</textarea></div>'+
-    '<button class="btn primary" data-act="sendreq" style="padding:11px">Enviar pedido</button><div style="border-top:1px solid var(--line);padding-top:14px">'+codeBox()+'</div>'+(ui.readOnly?'<p class="note">Tu acceso a esta página es solo de lectura. La coordinación tiene que darte permiso para usarla (“Puede usar”) desde el menú Compartir.</p>':'')+'</div>';
+    '<p class="note" style="margin:0">Ingresaste como '+esc(ui.email||'')+'. <button class="btn ghost" data-act="signout">Salir</button></p><button class="btn primary" data-act="sendreq" style="padding:11px">Enviar pedido</button><div style="border-top:1px solid var(--line);padding-top:14px">'+codeBox()+'</div>'+(ui.readOnly?'<p class="note">Tu acceso a esta página es solo de lectura. La coordinación tiene que darte permiso para usarla (“Puede usar”) desde el menú Compartir.</p>':'')+'</div>';
 }
 
 /* Cuidadora */
@@ -755,19 +734,18 @@ function vEquipo(){
   const av=uid=>{const p=S.names[uid];return '<img alt="" src="'+esc(p?p.avatarUrl:'data:image/gif;base64,R0lGODlhAQABAAAAACw=')+'">';};
   const checks=(uid,sel)=>'<div class="checks">'+(all.length?all.map(pid=>'<label><input type="checkbox" data-mp="'+uid+'" value="'+pid+'"'+((sel||[]).includes(pid)?' checked':'')+'> '+esc(S.pacientes[pid].nombre)+'</label>').join(''):'<span class="note">Primero cargá pacientes.</span>')+'</div>';
   let h='<div class="view-head"><div><h1>Equipo</h1><p>Creá un acceso para cada cuidadora y familiar, con sus pacientes. Cada persona ve solo lo de sus pacientes.</p></div></div>';
-  h+='<section class="panel" style="margin-bottom:18px"><div class="panel-h"><h2>Crear acceso con código</h2></div><div class="val">'+
+  h+='<section class="panel" style="margin-bottom:18px"><div class="panel-h"><h2>Crear usuario</h2></div><div class="val">'+
     '<div class="grid2"><div class="field"><label for="mk-nombre">Nombre</label><input id="mk-nombre" placeholder="Ej.: Marta Gómez" value="'+esc(draft('mk-nombre'))+'"></div>'+
-    '<div class="field"><label for="mk-rol">Rol</label><select id="mk-rol"><option value="cuidadora">Cuidadora</option><option value="familia">Familia</option></select></div></div>'+
-    '<div><span class="note">Pacientes</span>'+checks('nuevo',[])+'</div>'+
-    '<div><button class="btn primary" data-act="mkcode">Crear código</button></div>'+
-    (ui.lastCode?'<div class="chip good" style="white-space:normal;padding:10px 12px;border-radius:10px;font-size:14px">Código de '+esc(ui.lastCode.nombre)+': <b class="num" style="font-size:18px;letter-spacing:.15em">'+esc(ui.lastCode.code)+'</b> · mandáselo junto con el enlace de la app.</div>':'')+
-    '<p class="note" style="margin:0">La persona abre el enlace con su cuenta de Claude (invitada por email con permiso de edición) y escribe este código una sola vez.</p></div></section>';
+    '<div class="field"><label for="mk-email">Email</label><input id="mk-email" type="email" autocomplete="off" placeholder="marta@gmail.com" value="'+esc(draft('mk-email'))+'"></div>'+
+    '<div class="field"><label for="mk-rol">Rol</label><select id="mk-rol"><option value="cuidadora">Cuidadora</option><option value="familia">Familia</option><option value="coordinacion">Coordinación</option></select></div></div>'+
+    '<div><span class="note">Pacientes (para coordinación no hace falta)</span>'+checks('nuevo',[])+'</div>'+
+    '<div><button class="btn primary" data-act="mkuser">Crear usuario</button></div>'+
+    (ui.lastUser?'<div class="chip good" style="white-space:normal;padding:10px 12px;border-radius:10px;font-size:14px;display:block;line-height:1.5">Usuario creado para '+esc(ui.lastUser.nombre)+'.<br>Email: <b>'+esc(ui.lastUser.email)+'</b> · Contraseña temporal: <b class="num" style="letter-spacing:.08em">'+esc(ui.lastUser.pass)+'</b><br>Mandale el enlace de la app con estos datos. Puede cambiar la contraseña con “Olvidé mi contraseña”.</div>':'')+
+    '<p class="note" style="margin:0">Si la persona ya tiene usuario, que ingrese y pida acceso: el pedido aparece abajo.</p></div></section>';
   h+='<section class="panel" style="margin-bottom:18px"><div class="panel-h"><h2>Pedidos de acceso</h2><span class="chip '+(pend.length?'warn':'info')+'">'+pend.length+'</span></div>'+(pend.length?pend.map(s=>
-    '<div class="mem">'+av(s.id)+'<div><b>'+esc(nombre(s.id))+'</b> · pide acceso como '+ROLES[s.rol]+'<div class="note">'+esc(s.msg||'')+'</div>'+(s.rol==='coordinacion'?'':checks(s.id,[]))+'</div><div class="acts"><button class="btn primary" data-approve="'+s.id+'">Aprobar</button><button class="btn ghost" data-reject="'+s.id+'">Rechazar</button></div></div>').join(''):'<div class="empty">No hay pedidos pendientes. Compartí el enlace de la app con la cuidadora o la familia: al abrirlo, pueden pedir acceso.</div>')+'</section>';
-  h+='<section class="panel"><div class="panel-h"><h2>Personas con acceso</h2></div>'+(ids.length?ids.map(uid=>{const m=mem[uid];return '<div class="mem">'+av(uid)+'<div><b>'+esc(nombre(uid))+'</b> <span class="chip acc">'+ROLES[m.rol]+'</span>'+(uid.startsWith('c-')?' <span class="chip info num">código '+esc(uid.slice(2))+'</span>':'')+(m.rol==='coordinacion'?'<div class="note">Ve todos los pacientes.</div>':checks(uid,m.pacientes))+'</div><div class="acts">'+(m.rol!=='coordinacion'?'<button class="btn" data-savemp="'+uid+'">Guardar pacientes</button>':'')+'<button class="btn ghost danger" data-removem="'+uid+'">Quitar</button></div></div>';}).join(''):'<div class="empty">Todavía no aprobaste a nadie.</div>')+'</section>';
-  h+='<section class="panel" style="margin-top:18px"><div class="panel-h"><h2>Copia de seguridad</h2></div><div class="val"><p style="margin:0;color:var(--ink-2)">Los datos se guardan solo en este navegador. Descargá una copia seguido y guardala en un lugar seguro: si se borran los datos del navegador, se pierden.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-act="export">Descargar copia</button><label class="btn" for="imp-file" style="cursor:pointer">Restaurar desde una copia</label><input id="imp-file" type="file" accept="application/json,.json" hidden></div></div></section>';
-  h+='<section class="panel" style="margin-top:18px"><div class="panel-h"><h2>Usar este dispositivo como cuidadora o familia</h2></div><div class="val"><p style="margin:0;color:var(--ink-2)">Si la cuidadora usa este mismo celular o tablet, que escriba acá su código. Al terminar, toca Salir y vuelve la vista de coordinación.</p>'+codeBox()+'</div></section>';
-  h+='<p class="note" style="margin-top:16px;max-width:80ch">En esta versión independiente, la cuidadora o la familia usan la app en este mismo dispositivo: entran con su código de acceso y tocan Salir al terminar. Los datos de salud son sensibles: protegé el dispositivo con clave y revisá el consentimiento y el registro de la base según la Ley 25.326.</p>';
+    '<div class="mem">'+av(s.id)+'<div><b>'+esc(s.email||nombre(s.id))+'</b> · pide acceso como '+ROLES[s.rol]+'<div class="note">'+esc(s.msg||'')+'</div>'+(s.rol==='coordinacion'?'':checks(s.id,[]))+'</div><div class="acts"><button class="btn primary" data-approve="'+s.id+'">Aprobar</button><button class="btn ghost" data-reject="'+s.id+'">Rechazar</button></div></div>').join(''):'<div class="empty">No hay pedidos pendientes. Compartí el enlace de la app con la cuidadora o la familia: al abrirlo, pueden pedir acceso.</div>')+'</section>';
+  h+='<section class="panel"><div class="panel-h"><h2>Personas con acceso</h2></div>'+(ids.length?ids.map(uid=>{const m=mem[uid];return '<div class="mem">'+av(uid)+'<div><b>'+esc(nombre(uid))+'</b> <span class="chip acc">'+ROLES[m.rol]+'</span>'+(m.email?' <span class="note">'+esc(m.email)+'</span>':'')+(uid.startsWith('c-')?' <span class="chip info num">código '+esc(uid.slice(2))+'</span>':'')+(m.rol==='coordinacion'?'<div class="note">Ve todos los pacientes.</div>':checks(uid,m.pacientes))+'</div><div class="acts">'+(m.rol!=='coordinacion'?'<button class="btn" data-savemp="'+uid+'">Guardar pacientes</button>':'')+'<button class="btn ghost danger" data-removem="'+uid+'">Quitar</button></div></div>';}).join(''):'<div class="empty">Todavía no aprobaste a nadie.</div>')+'</section>';
+  h+='<p class="note" style="margin-top:16px;max-width:80ch">Cada persona entra con su email y su contraseña. Las reglas de seguridad de Firebase hacen que cada una solo pueda leer y escribir lo de sus pacientes. Para datos reales de salud, revisá el consentimiento y el registro de la base según la Ley 25.326.</p>';
   return h;
 }
 
@@ -810,26 +788,35 @@ document.addEventListener('click',async e=>{
   /* acceso */
   if(d.act==='sendreq'){
     const r=document.getElementById('req-rol').value,msg=(document.getElementById('req-msg').value||'').trim();
-    const ok=await safe(()=>db.doc('solicitudes/'+me).set({rol:r,msg:msg.slice(0,400),ts:Date.now()}),'Pedido enviado');
+    const ok=await safe(()=>db.doc('solicitudes/'+me).set({rol:r,msg:msg.slice(0,400),ts:Date.now(),email:ui.email||''}),'Pedido enviado');
     if(!ok) ui.readOnly=true; render(); return;
   }
-  if(d.act==='usecode'){
-    const v=(document.getElementById('acc-code').value||'').trim().toUpperCase();
-    if(!v){document.getElementById('acc-code').focus();return;}
-    if(!(S.equipo.miembros||{})['c-'+v]){toast('Ese código no existe o fue dado de baja.');return;}
-    storeCode(v);delete ui.drafts['acc-code'];ui.view=null;render();handleIntent();toast('Bienvenida, '+nombre('c-'+v));return;
+  if(d.act==='login'||d.act==='signup'){
+    const em=(document.getElementById('li-email').value||'').trim(),pw=document.getElementById('li-pass').value||'';
+    if(!em||!pw){ui.loginErr='Escribí tu email y tu contraseña.';render();return;}
+    ui.loginErr=null;ui.loginBusy=true;render();
+    try{if(d.act==='login')await auth.signInWithEmailAndPassword(em,pw);else await auth.createUserWithEmailAndPassword(em,pw);delete ui.drafts['li-pass'];}
+    catch(err){ui.loginErr=authMsg(err&&err.code);}
+    ui.loginBusy=false;render();return;
   }
-  if(d.act==='logout'){storeCode(null);who=null;ui.view=null;render();return;}
-  if(d.act==='export'){window.__cuidacasaExport();return;}
-  if(d.act==='mkcode'){
-    const nom=(document.getElementById('mk-nombre').value||'').trim(),r=document.getElementById('mk-rol').value;
-    if(!nom){toast('Escribí el nombre de la persona.');document.getElementById('mk-nombre').focus();return;}
+  if(d.act==='forgot'){const em=(document.getElementById('li-email').value||'').trim();if(!em){ui.loginErr='Escribí tu email y tocá de nuevo “Olvidé mi contraseña”.';render();return;}
+    try{await auth.sendPasswordResetEmail(em);ui.loginErr=null;render();toast('Te mandamos un email para crear una contraseña nueva.');}catch(err){ui.loginErr=authMsg(err&&err.code);render();}return;}
+  if(d.act==='signout'){ui.fatal=null;await auth.signOut();return;}
+  if(d.act==='reload'){location.reload();return;}
+  if(d.act==='mkuser'){
+    const g=id=>(document.getElementById(id).value||'').trim();
+    const nom=g('mk-nombre'),em=g('mk-email').toLowerCase(),r=document.getElementById('mk-rol').value;
+    if(!nom||!em){toast('Escribí nombre y email.');return;}
     const pac=[...document.querySelectorAll('input[data-mp="nuevo"]:checked')].map(x=>x.value);
-    if(!pac.length){toast('Elegí al menos un paciente.');return;}
-    const abc='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let code='';const rnd=crypto.getRandomValues(new Uint32Array(6));rnd.forEach(n=>{code+=abc[n%abc.length];});
-    const miembros=JSON.parse(JSON.stringify(S.equipo.miembros||{}));miembros['c-'+code]={rol:r,pacientes:pac,nombre:nom.slice(0,80)};
-    const ok=await safe(()=>writeEquipo({miembros}),'Acceso creado');
-    if(ok){ui.lastCode={code,nombre:nom};delete ui.drafts['mk-nombre'];render();}
+    if(r!=='coordinacion'&&!pac.length){toast('Elegí al menos un paciente.');return;}
+    const abc='abcdefghjkmnpqrstuvwxyz23456789';let pass='';crypto.getRandomValues(new Uint32Array(10)).forEach(n=>{pass+=abc[n%abc.length];});
+    let uid;
+    try{const sec=firebase.apps.find(a=>a.name==='alta')||firebase.initializeApp(FIREBASE_CONFIG,'alta');const cred=await sec.auth().createUserWithEmailAndPassword(em,pass);uid=cred.user.uid;await sec.auth().signOut();}
+    catch(err){toast(authMsg(err&&err.code));return;}
+    const miembros=JSON.parse(JSON.stringify(S.equipo.miembros||{}));miembros[uid]={rol:r,pacientes:r==='coordinacion'?[]:pac,nombre:nom.slice(0,80),email:em};
+    if(r==='coordinacion'){S.equipo.admins=(S.equipo.admins||[]).concat(uid);}
+    const ok=await safe(()=>writeEquipo({miembros}),'Usuario creado');
+    if(ok){ui.lastUser={nombre:nom,email:em,pass};['mk-nombre','mk-email'].forEach(k=>delete ui.drafts[k]);render();}
     return;
   }
   if(d.act==='cancelreq'){await safe(()=>db.doc('solicitudes/'+me).delete());return;}
@@ -919,11 +906,11 @@ document.addEventListener('click',async e=>{
   /* equipo */
   const picked=uid=>[...document.querySelectorAll('input[data-mp="'+uid+'"]:checked')].map(x=>x.value);
   if(d.approve){const s=S.solicitudes.find(x=>x.id===d.approve);if(!s)return;
-    const miembros=Object.assign({},S.equipo.miembros||{});miembros[s.id]={rol:s.rol,pacientes:s.rol==='coordinacion'?[]:picked(s.id)};
+    const miembros=Object.assign({},S.equipo.miembros||{});miembros[s.id]={rol:s.rol,pacientes:s.rol==='coordinacion'?[]:picked(s.id),nombre:(s.email||'').slice(0,80),email:s.email||''};if(s.rol==='coordinacion')S.equipo.admins=(S.equipo.admins||[]).concat(s.id);
     const ok=await safe(()=>writeEquipo({miembros}),'Acceso aprobado');if(ok)await safe(()=>db.doc('solicitudes/'+s.id).delete());return;}
   if(d.reject){await safe(()=>db.doc('solicitudes/'+d.reject).delete(),'Pedido rechazado');return;}
   if(d.savemp){const miembros=JSON.parse(JSON.stringify(S.equipo.miembros||{}));if(!miembros[d.savemp])return;miembros[d.savemp].pacientes=picked(d.savemp);await safe(()=>writeEquipo({miembros}),'Pacientes actualizados');return;}
-  if(d.removem){const uid=d.removem;ui.sheet={kind:'confirm',title:'¿Quitar a '+nombre(uid)+'?',text:'Deja de ver pacientes en la app. Para cortar del todo el acceso, quitala también desde el menú Compartir.',ok:'Quitar',run:()=>{const m=JSON.parse(JSON.stringify(S.equipo.miembros||{}));delete m[uid];return writeEquipo({miembros:m});},msg:'Persona quitada'};renderSheet();return;}
+  if(d.removem){const uid=d.removem;ui.sheet={kind:'confirm',title:'¿Quitar a '+nombre(uid)+'?',text:'Deja de ver pacientes en la app. Para cortar del todo el acceso, quitala también desde el menú Compartir.',ok:'Quitar',run:()=>{if(uid===me){toast('No podés quitarte a vos misma.');return Promise.resolve();}const m=JSON.parse(JSON.stringify(S.equipo.miembros||{}));delete m[uid];S.equipo.admins=(S.equipo.admins||[]).filter(x=>x!==uid);return writeEquipo({miembros:m});},msg:'Persona quitada'};renderSheet();return;}
 });
 document.addEventListener('change',async e=>{
   const t=e.target,d=t.dataset,pid=ui.planPid,p=S.pacientes[pid]; if(!p) return;
@@ -966,27 +953,78 @@ async function handleIntent(){
 }
 
 /* ---------- datos en vivo ---------- */
-const unsub={};
-function subDias(){
-  if(unsub.dias) unsub.dias();
-  S.fecha=now().fecha; S.dias={}; S.loaded.d=false;
-  unsub.dias=db.collection('dias').where('fecha','==',S.fecha).onSnapshot(q=>{const o={};q.docs.forEach(x=>{const v=x.data();if(v&&v.pid)o[v.pid]=v;});S.dias=o;S.loaded.d=true;render();handleIntent();},onErr);
+const unsub={};let auth=null;
+function wrapRef(r){return {id:r.id,path:r.path,get:()=>r.get(),set:d=>r.set(d),update:d=>r.set(d,{merge:true}),delete:()=>r.delete(),onSnapshot:(n,e)=>r.onSnapshot(n,e)};}
+function wrapDb(f){return {doc:p=>wrapRef(f.doc(p)),collection:c=>{const col=f.collection(c);return {where:(...a)=>col.where(...a),orderBy:(...a)=>col.orderBy(...a),limit:n=>col.limit(n),onSnapshot:(n,e)=>col.onSnapshot(n,e),get:()=>col.get(),doc:id=>wrapRef(id?col.doc(id):col.doc())};}};}
+function saveFile(filename,data,type){const blob=data instanceof Blob?data:new Blob([data],{type:type||'application/octet-stream'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}
+const DL={save:async({filename,data})=>saveFile(filename,data,filename.endsWith('.svg')?'image/svg+xml':undefined)};
+function stopAll(){Object.keys(unsub).forEach(k=>{try{unsub[k]&&unsub[k]();}catch(e){}delete unsub[k];});}
+function onErr(e){if(e&&e.code&&e.code!=='permission-denied')console.warn(e);}
+let subKey='';
+function subData(){
+  const admin=(S.equipo.admins||[]).includes(me);
+  const pids=admin?[]:((((S.equipo.miembros||{})[me]||{}).pacientes)||[]).slice().sort();
+  const key=(admin?'A':'M')+'|'+now().fecha+'|'+pids.join(',');
+  if(key===subKey) return; subKey=key;
+  Object.keys(unsub).filter(k=>k!=='e'&&k!=='mine').forEach(k=>{try{unsub[k]();}catch(e){}delete unsub[k];});
+  S.fecha=now().fecha;S.pacientes={};S.dias={};S.consultas=[];S.loaded.p=false;S.loaded.d=false;
+  if(admin){
+    unsub.p=db.collection('pacientes').onSnapshot(q=>{const o={};q.docs.forEach(x=>{o[x.id]=x.data();});S.pacientes=o;S.loaded.p=true;render();handleIntent();},onErr);
+    unsub.dias=db.collection('dias').where('fecha','==',S.fecha).onSnapshot(q=>{const o={};q.docs.forEach(x=>{const v=x.data();if(v&&v.pid)o[v.pid]=v;});S.dias=o;S.loaded.d=true;render();handleIntent();},onErr);
+    unsub.c=db.collection('consultas').orderBy('ts','desc').limit(200).onSnapshot(q=>{S.consultas=q.docs.map(x=>Object.assign({id:x.id},x.data()));render();},onErr);
+    unsub.s=db.collection('solicitudes').onSnapshot(q=>{S.solicitudes=q.docs.map(x=>Object.assign({id:x.id},x.data()));render();},onErr);
+    return;
+  }
+  if(!pids.length){S.loaded.p=true;S.loaded.d=true;render();return;}
+  const fp=new Set(),fd=new Set(),cq={};
+  pids.forEach(pid=>{
+    const okP=()=>{fp.add(pid);if(fp.size>=pids.length)S.loaded.p=true;render();handleIntent();};
+    const okD=()=>{fd.add(pid);if(fd.size>=pids.length)S.loaded.d=true;render();handleIntent();};
+    unsub['p_'+pid]=db.doc('pacientes/'+pid).onSnapshot(s=>{if(s.exists)S.pacientes[pid]=s.data();else delete S.pacientes[pid];okP();},okP);
+    unsub['d_'+pid]=db.doc('dias/'+pid+'_'+S.fecha).onSnapshot(s=>{if(s.exists)S.dias[pid]=s.data();else delete S.dias[pid];okD();},okD);
+    unsub['c_'+pid]=db.collection('consultas').where('pid','==',pid).onSnapshot(q=>{cq[pid]=q.docs.map(x=>Object.assign({id:x.id},x.data()));S.consultas=[].concat(...Object.values(cq)).sort((a,b)=>(b.ts||0)-(a.ts||0));render();},onErr);
+  });
 }
-function onErr(e){if(e&&e.code==='revoked'){ui.fatal='revoked';render();}}
+function subMine(){if(unsub.mine||!me)return;unsub.mine=db.doc('solicitudes/'+me).onSnapshot(s=>{S.solicitudes=s.exists?[Object.assign({id:me},s.data())]:[];render();},()=>{});}
+function subEquipo(u){
+  if(unsub.e){try{unsub.e();}catch(e){}}
+  unsub.e=db.doc('config/equipo').onSnapshot(s=>{
+    if(!s.exists){
+      if(!ui.bootTried){ui.bootTried=true;db.doc('config/equipo').set({admins:[me],adminInfo:{[me]:{nombre:u.email||'Coordinación'}},miembros:{}}).catch(err=>{ui.fatal='fb:'+((err&&err.code)||'create');render();});}
+      return;
+    }
+    S.equipo=s.data()||{};if(!S.equipo.miembros)S.equipo.miembros={};S.loaded.e=true;
+    ui.noAccess=!rol();
+    if(ui.noAccess){S.loaded.p=true;subMine();render();return;}
+    if(unsub.mine){unsub.mine();delete unsub.mine;}
+    subData();render();handleIntent();
+  },err=>{
+    const c=err&&err.code;
+    if(c&&c!=='permission-denied'){ui.fatal='fb:'+c;render();return;}
+    ui.noAccess=true;S.loaded.e=true;S.loaded.p=true;subMine();render();
+    setTimeout(()=>{if(me===u.uid&&ui.noAccess)subEquipo(u);},20000);
+  });
+}
 async function boot(){
   readHash();
-  if(!window.claude||typeof claude.use!=='function'){ui.fatal='nodb';render();return;}
-  [db,user,dl]=await Promise.all([claude.use('db'),claude.use('user'),claude.use('downloads')]);
-  if(!db){ui.fatal='nodb';render();return;}
-  if(user){[me,isOwner,canEdit]=await Promise.all([user.id(),user.isOwner(),user.canEdit()]);}
-  unsub.e=db.doc('config/equipo').onSnapshot(s=>{S.equipo=(s.exists&&s.data())||{miembros:{}};if(!S.equipo.miembros)S.equipo.miembros={};S.loaded.e=true;render();handleIntent();},onErr);
-  unsub.p=db.collection('pacientes').onSnapshot(q=>{const o={};q.docs.forEach(x=>{o[x.id]=x.data();});S.pacientes=o;S.loaded.p=true;render();handleIntent();},onErr);
-  unsub.c=db.collection('consultas').orderBy('ts','desc').limit(200).onSnapshot(q=>{S.consultas=q.docs.map(x=>Object.assign({id:x.id},x.data()));render();},onErr);
-  unsub.s=db.collection('solicitudes').onSnapshot(q=>{S.solicitudes=q.docs.map(x=>Object.assign({id:x.id},x.data()));render();},onErr);
-  subDias();
-  setInterval(()=>{if(now().fecha!==S.fecha)subDias();else if(!ui.sheet&&!document.activeElement.matches('input,textarea,select'))render();},30000);
+  if(typeof firebase==='undefined'){ui.fatal='nodb';render();return;}
+  firebase.initializeApp(FIREBASE_CONFIG);
+  auth=firebase.auth();
+  const fdb=firebase.firestore();
+  try{fdb.settings({ignoreUndefinedProperties:true,experimentalAutoDetectLongPolling:true});}catch(e){}
+  db=wrapDb(fdb);dl=DL;
+  ui.auth='wait';
+  auth.onAuthStateChanged(u=>{
+    stopAll();subKey='';ui.bootTried=false;
+    S.equipo={miembros:{}};S.pacientes={};S.dias={};S.consultas=[];S.solicitudes=[];S.loaded={e:false,p:false,d:false};ui.noAccess=false;ui.view=null;ui.sheet=null;renderSheet();
+    if(!u){me=null;who=null;ui.auth='login';render();return;}
+    me=u.uid;who=me;ui.email=u.email;ui.auth=null;
+    app.innerHTML='<div class="panel center"><h2>Cargando CuidaCasa…</h2><p class="note">Conectando con los datos del equipo.</p><button class="btn ghost" data-act="signout">Salir</button></div>';
+    subEquipo(u);
+    const uidNow=u.uid;setTimeout(()=>{if(me===uidNow&&!S.loaded.e&&!ui.noAccess&&!ui.fatal){ui.fatal='timeout';render();}},15000);
+  });
+  setInterval(()=>{if(me&&S.loaded.e&&!ui.noAccess&&now().fecha!==S.fecha)subData();else if(!ui.sheet&&document.activeElement&&!document.activeElement.matches('input,textarea,select'))render();},30000);
 }
-document.addEventListener('change',e=>{if(e.target.id!=='imp-file'||!e.target.files[0])return;const f=e.target.files[0];const r=new FileReader();r.onload=()=>{try{window.__cuidacasaImport(r.result);toast('Copia restaurada');}catch(err){toast('Ese archivo no es una copia válida de CuidaCasa.');}e.target.value='';};r.readAsText(f);});
 boot();
 })();
 </script>
