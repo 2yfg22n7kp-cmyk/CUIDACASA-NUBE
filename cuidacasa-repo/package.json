@@ -1,8 +1,0 @@
-{
-  "name": "cuidacasa",
-  "private": true,
-  "description": "CuidaCasa: app de cuidado trazable con avisos al celular",
-  "dependencies": {
-    "firebase-admin": "^13.6.0"
-  }
-}
